@@ -24,17 +24,38 @@ import soundfile as sf
 # Project roots and directories
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_DIR = ROOT_DIR / "data"
-CACHE_DIR = DATA_DIR / "cache"
 UPLOADS_DIR = DATA_DIR / "uploads"
 NOTEPAD_DRAFT_FILE = DATA_DIR / "notepad_draft.json"
-for d in [DATA_DIR, CACHE_DIR, UPLOADS_DIR]:
+for d in [DATA_DIR, UPLOADS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # Import existing core modules
+from app.config import CACHE_DIR
 from app.tts_engine import synthesize_text, get_all_voices
 from app.local_tts import synthesize_kokoro, is_kokoro_downloaded, KOKORO_VOICES
 from app.speech_rules import rule_engine
 from app.state_manager import state_manager
+
+# Migrate voices.json and clean up any legacy in-repo cache folder
+legacy_cache = DATA_DIR / "cache"
+if legacy_cache.exists():
+    legacy_voices = legacy_cache / "voices.json"
+    target_voices = CACHE_DIR / "voices.json"
+    if legacy_voices.exists() and not target_voices.exists():
+        try:
+            import shutil
+            shutil.copy2(legacy_voices, target_voices)
+        except Exception:
+            pass
+    for lf in legacy_cache.glob("*"):
+        try:
+            lf.unlink(missing_ok=True)
+        except Exception:
+            pass
+    try:
+        legacy_cache.rmdir()
+    except Exception:
+        pass
 
 
 # Global Voice Cache for Instant Zero-Latency Loading
@@ -249,7 +270,7 @@ class VoiceManagerDialog(ctk.CTkToplevel):
 
             models_str = f"Kokoro AI: {models_mb:.1f} MB" if kokoro_installed else "Kokoro AI: Not Installed (0 MB)"
             self.lbl_storage_info.configure(
-                text=f"💾 Storage: Audio Cache: {cache_mb:.1f} MB ({cache_count} files)  |  {models_str}"
+                text=f"💾 Storage (%LocalAppData%): Cache: {cache_mb:.1f} MB ({cache_count} files)  |  {models_str}"
             )
 
             if not kokoro_installed or models_mb < 1.0:
@@ -901,6 +922,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self._is_closing = False
         self.voice_dialog = None
         self.rules_dialog = None
+
+        self.page_turns_since_cleanup: int = 0
 
         # Visual elements
         self.current_photo: Optional[ImageTk.PhotoImage] = None
@@ -2134,7 +2157,40 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.scrubber_slider.set(0)
             self._set_status(f"Page {page_idx + 1} loaded ({len(self.sentences)} sentences). Click any word to read.")
 
+        # Auto-prune stale audio clips every 3 pages so disk space stays minimal
+        self.page_turns_since_cleanup += 1
+        if self.page_turns_since_cleanup >= 3:
+            self.page_turns_since_cleanup = 0
+            self._auto_prune_audio_cache()
+
         self._render_current_page()
+
+    def _auto_prune_audio_cache(self):
+        """Automatically prunes stale audio cache files in background every 3 pages."""
+        def _worker():
+            try:
+                if not CACHE_DIR.exists():
+                    return
+                # Protect audio files created in the last 15 seconds (e.g. current page audio)
+                cutoff_time = time.time() - 15.0
+                deleted_count = 0
+                freed_bytes = 0
+                for f in CACHE_DIR.glob("*"):
+                    if f.is_file() and f.name != "voices.json":
+                        try:
+                            if f.stat().st_mtime < cutoff_time:
+                                freed_bytes += f.stat().st_size
+                                f.unlink(missing_ok=True)
+                                deleted_count += 1
+                        except Exception:
+                            pass
+                if deleted_count > 0:
+                    freed_mb = freed_bytes / (1024 * 1024)
+                    print(f"[CACHE] Auto-pruned {deleted_count} stale clips ({freed_mb:.2f} MB freed) from {CACHE_DIR}")
+            except Exception as e:
+                print(f"[CACHE] Auto-prune error: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _group_words_into_sentences(self, raw_words: List[Any]) -> List[Dict[str, Any]]:
         """Groups raw word tuples into sentences with exact pixel bounding boxes."""
