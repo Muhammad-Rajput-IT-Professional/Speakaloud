@@ -23,21 +23,18 @@ import soundfile as sf
 
 # Project roots and directories
 ROOT_DIR = Path(__file__).resolve().parent
-DATA_DIR = ROOT_DIR / "data"
-UPLOADS_DIR = DATA_DIR / "uploads"
-NOTEPAD_DRAFT_FILE = DATA_DIR / "notepad_draft.json"
-for d in [DATA_DIR, UPLOADS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
 
-# Import existing core modules
-from app.config import CACHE_DIR
+# Import centralized per-machine paths & core modules
+from app.config import (
+    APP_DATA_DIR, DATA_DIR, CACHE_DIR, UPLOADS_DIR, NOTEPAD_DRAFT_FILE, MODELS_DIR
+)
 from app.tts_engine import synthesize_text, get_all_voices
 from app.local_tts import synthesize_kokoro, is_kokoro_downloaded, KOKORO_VOICES
 from app.speech_rules import rule_engine
 from app.state_manager import state_manager
 
 # Migrate voices.json and clean up any legacy in-repo cache folder
-legacy_cache = DATA_DIR / "cache"
+legacy_cache = ROOT_DIR / "data" / "cache"
 if legacy_cache.exists():
     legacy_voices = legacy_cache / "voices.json"
     target_voices = CACHE_DIR / "voices.json"

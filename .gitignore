@@ -4,12 +4,8 @@ __pycache__/
 *$py.class
 *.spec
 
-# TTS Audio Cache & Heavy Neural Models (App downloads models automatically)
-data/cache/
-data/models/
-data/uploads/
-data/notepad_draft.json
-data/library.json
+# User Data & Storage (Stored per-machine in %LOCALAPPDATA%\Speakaloud)
+data/
 
 # Environment & IDE
 .env
