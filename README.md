@@ -25,10 +25,12 @@ A high-performance **100% Native Windows Desktop Application** designed for read
 ### 🎙️ 3. Dual Speech Engines & Storage Management
 - **Microsoft Edge Cloud Voices**: 320+ natural voices with zero local disk footprint.
 - **Kokoro-82M Local Neural TTS**: Fully offline high-quality speech generation.
-- **Storage & Cache Cleaner**:
-  - One-click **🧹 Clear Audio Cache** button in the sidebar and Voice Manager frees temporary audio clips.
-  - One-click **🗑️ Delete Local Models** frees ~400 MB if you only want to use Edge Cloud Voices.
-  - Completely preserves reading history, bookmarks, speech rules, and drafts.
+- **Smart AppData Cache Architecture**:
+  - Audio clips are stored in `%LOCALAPPDATA%\Speakaloud\cache`, leaving the app repository 100% clean and lightweight.
+  - **Auto-Prunes Every 3 Pages**: Old audio clips from previous pages are purged automatically in the background so disk footprint never balloons beyond ~1 MB.
+  - One-click **🧹 Clear Audio Cache** button in the sidebar and Voice Manager frees temporary clips on demand.
+  - One-click **🗑️ Delete Local Models** button frees ~400 MB if you only use Edge Cloud Voices.
+  - Reading progress, page positions, speech rules, and drafts are 100% preserved.
 
 ### 🗣️ 4. Pronunciation & Speech Rules
 - **Acronym & Term Expansion**: Automatically pronounces abbreviations phonetically (e.g., replaces `AMA` with `Azure Monitor Agent`).
