@@ -1,0 +1,67 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Length 285 >>
+stream
+BT
+/F1 16 Tf
+50 720 Td
+(Speakaloud PDF Reader Demo) Tj
+/F1 12 Tf
+0 -35 Td
+(The Prophet Muhammad PBUH taught peace and kindness to all humanity.) Tj
+0 -25 Td
+(Recent clinical research [1, 2] confirms that regular reading improves focus.) Tj
+0 -25 Td
+(For more details, visit https://example.org/study for complete data.) Tj
+0 -25 Td
+(Please finish this reading task ASAP e.g. before the end of the day.) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Length 240 >>
+stream
+BT
+/F1 16 Tf
+50 720 Td
+(Chapter Two: Continuous Playback) Tj
+/F1 12 Tf
+0 -35 Td
+(This is the second page of our document demonstrating auto page turning.) Tj
+0 -25 Td
+(When the voice reaches the end of page one, it automatically turns here.) Tj
+0 -25 Td
+(You can click any word to jump directly to it.) Tj
+ET
+endstream
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000123 00000 n 
+0000000247 00000 n 
+0000000371 00000 n 
+0000000448 00000 n 
+0000000787 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+1081
+%%EOF
