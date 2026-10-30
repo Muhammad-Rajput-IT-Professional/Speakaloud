@@ -2221,13 +2221,21 @@ class SpeakaloudDesktopApp(ctk.CTk):
         if not raw_words:
             return []
 
+        abbreviations = {
+            "mr.", "ms.", "mrs.", "dr.", "prof.", "sr.", "jr.", "vs.", "al.", 
+            "etc.", "e.g.", "i.e.", "approx.", "dept.", "est.", "min.", "max.", 
+            "inc.", "ltd.", "co.", "corp.", "ave.", "st.", "blvd.", "rd."
+        }
+
         sentences = []
         cur_words = []
         cur_tokens = []
         s_idx = 0
 
-        for w in raw_words:
+        for i, w in enumerate(raw_words):
             x0, y0, x1, y1, text, b_no, l_no, w_no = w
+            next_w = raw_words[i + 1] if i + 1 < len(raw_words) else None
+
             cur_tokens.append(text)
             cur_words.append({
                 "text": text,
@@ -2240,9 +2248,33 @@ class SpeakaloudDesktopApp(ctk.CTk):
             })
 
             is_break = False
-            if text and text[-1] in ".?!":
-                if len(text) > 2 and text not in ["Mr.", "Ms.", "Dr.", "Jr.", "Sr.", "vs.", "al."]:
+            clean_text = text.rstrip("\"')]}»”’")
+
+            # 1. Punctuation break (. ? !)
+            if clean_text and clean_text[-1] in ".?!":
+                lowered = clean_text.lower()
+                is_num_prefix = bool(re.match(r"^\d+\.$", clean_text))
+                is_abbrev = is_num_prefix or lowered in abbreviations or (len(clean_text) == 2 and clean_text[0].isupper() and clean_text[1] == '.')
+                if not is_abbrev:
                     is_break = True
+
+            # 2. Colon / semicolon break (e.g. intro before a list: 'naturally:')
+            elif clean_text and clean_text[-1] in ":;":
+                if next_w is None or next_w[5] != b_no or next_w[6] != l_no:
+                    is_break = True
+
+            # 3. Block change, heading, or list-item boundary
+            if not is_break and next_w is not None:
+                next_b_no = next_w[5]
+                next_text = next_w[4]
+                # Next word starts a bullet or numbered list item
+                if next_text in ["-", "•", "*", "–", "—"] or re.match(r"^\d+[\.\)]$", next_text):
+                    is_break = True
+                # Different PDF block (heading vs paragraph, or separate paragraphs)
+                elif next_b_no != b_no:
+                    y_gap = next_w[1] - y1
+                    if len(cur_words) > 0 and (y_gap > 8 or len(cur_tokens) <= 20 or clean_text[-1] in ".,?!:;"):
+                        is_break = True
 
             if is_break and len(cur_words) >= 1:
                 sentences.append({
