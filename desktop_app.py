@@ -146,9 +146,10 @@ class VoiceManagerDialog(ctk.CTkToplevel):
         super().__init__(parent)
         self.title("Voice & Speech Manager - Speakaloud")
         self.geometry("740x630")
-        self.minsize(580, 480)
+        self.minsize(620, 450)
         self.on_select_voice = on_select_voice
         self.parent = parent
+        self.display_limit = 25
 
         # Guarantee dialog opens in front and takes focus immediately with full maximize/minimize buttons
         self.lift()
@@ -167,6 +168,12 @@ class VoiceManagerDialog(ctk.CTkToplevel):
         else:
             self._apply_filter()
 
+    def _update_dimensions_event(self, event=None):
+        """Ignore child widget configure events to prevent resize/drag lag."""
+        if event is not None and event.widget != self:
+            return
+        super()._update_dimensions_event(event)
+
     def _check_cache_ready(self):
         if GLOBAL_VOICES_CACHE:
             self.all_voices = list(GLOBAL_VOICES_CACHE)
@@ -175,9 +182,9 @@ class VoiceManagerDialog(ctk.CTkToplevel):
             self.after(150, self._check_cache_ready)
 
     def _build_ui(self):
-        # Header / Search Filter Bar
+        # 1. Header / Search Filter Bar (Top)
         header = ctk.CTkFrame(self, height=110, corner_radius=0)
-        header.pack(fill="x", padx=14, pady=(12, 6))
+        header.pack(side="top", fill="x", padx=14, pady=(12, 6))
 
         title = ctk.CTkLabel(header, text="Select Reading Voice", font=("Segoe UI", 16, "bold"))
         title.pack(anchor="w", padx=10, pady=(6, 2))
@@ -219,22 +226,23 @@ class VoiceManagerDialog(ctk.CTkToplevel):
         )
         chk_en.pack(side="right", padx=4)
 
-        # Scrollable voice list
-        self.voice_scroll = ctk.CTkScrollableFrame(self, corner_radius=8)
-        self.voice_scroll.pack(fill="both", expand=True, padx=14, pady=(4, 4))
+        # 2. Footer (Bottom - packed before scroll frame so it NEVER vanishes or cuts out!)
+        footer = ctk.CTkFrame(self, height=38, fg_color="transparent")
+        footer.pack(side="bottom", fill="x", padx=14, pady=(2, 8))
 
-        # Storage & Cache Management Card
+        self.count_label = ctk.CTkLabel(footer, text="Loading voices...", font=("Segoe UI", 11), text_color="gray60")
+        self.count_label.pack(side="left", padx=6)
+
+        btn_close = ctk.CTkButton(footer, text="Close", width=80, height=28, command=self.destroy)
+        btn_close.pack(side="right", padx=6)
+
+        # 3. Storage & Cache Management Card (Bottom - packed before scroll frame)
         self.storage_card = ctk.CTkFrame(self, corner_radius=8, fg_color=("gray90", "#24242d"))
-        self.storage_card.pack(fill="x", padx=14, pady=(2, 4))
+        self.storage_card.pack(side="bottom", fill="x", padx=14, pady=(2, 4))
 
-        self.lbl_storage_info = ctk.CTkLabel(
-            self.storage_card, text="Calculating storage...",
-            font=("Segoe UI", 11), anchor="w"
-        )
-        self.lbl_storage_info.pack(side="left", padx=12, pady=6)
-
+        # Pack action buttons on RIGHT first so they NEVER get clipped/cut off!
         self.btn_delete_models = ctk.CTkButton(
-            self.storage_card, text="🗑️ Delete Local Models", width=155, height=26,
+            self.storage_card, text="🗑️ Delete Local Models", width=145, height=26,
             font=("Segoe UI", 11), fg_color="#991b1b", hover_color="#7f1d1d",
             command=self._confirm_delete_models
         )
@@ -247,15 +255,15 @@ class VoiceManagerDialog(ctk.CTkToplevel):
         )
         self.btn_clear_cache.pack(side="right", padx=4, pady=6)
 
-        # Footer
-        footer = ctk.CTkFrame(self, height=38, fg_color="transparent")
-        footer.pack(fill="x", padx=14, pady=(2, 8))
+        self.lbl_storage_info = ctk.CTkLabel(
+            self.storage_card, text="Calculating storage...",
+            font=("Segoe UI", 11), anchor="w"
+        )
+        self.lbl_storage_info.pack(side="left", fill="x", expand=True, padx=12, pady=6)
 
-        self.count_label = ctk.CTkLabel(footer, text="Loading voices...", font=("Segoe UI", 11), text_color="gray60")
-        self.count_label.pack(side="left", padx=6)
-
-        btn_close = ctk.CTkButton(footer, text="Close", width=80, height=28, command=self.destroy)
-        btn_close.pack(side="right", padx=6)
+        # 4. Scrollable voice list (Center - packed LAST with expand=True)
+        self.voice_scroll = ctk.CTkScrollableFrame(self, corner_radius=8)
+        self.voice_scroll.pack(side="top", fill="both", expand=True, padx=14, pady=(2, 4))
 
         # Initial storage refresh
         self.after(50, self._refresh_storage_ui)
@@ -265,9 +273,9 @@ class VoiceManagerDialog(ctk.CTkToplevel):
             cache_mb, cache_count = self._calc_cache_stats()
             models_mb, kokoro_installed = self._calc_models_stats()
 
-            models_str = f"Kokoro AI: {models_mb:.1f} MB" if kokoro_installed else "Kokoro AI: Not Installed (0 MB)"
+            models_str = f"Kokoro AI: {models_mb:.1f} MB" if kokoro_installed else "Kokoro AI: 0 MB"
             self.lbl_storage_info.configure(
-                text=f"💾 Storage (%LocalAppData%): Cache: {cache_mb:.1f} MB ({cache_count} files)  |  {models_str}"
+                text=f"💾 Cache: {cache_mb:.1f} MB ({cache_count} files)  |  {models_str}"
             )
 
             if not kokoro_installed or models_mb < 1.0:
@@ -393,8 +401,15 @@ class VoiceManagerDialog(ctk.CTkToplevel):
             filtered.append(v)
 
         self.filtered_voices = filtered
-        show_count = min(len(filtered), 45)
-        self.count_label.configure(text=f"Showing {show_count} of {len(filtered)} voices")
+        self.display_limit = 25
+        showing = min(self.display_limit, len(filtered))
+        self.count_label.configure(text=f"Showing {showing} of {len(filtered)} voices")
+        self._render_voice_cards()
+
+    def _load_more_voices(self):
+        self.display_limit += 25
+        showing = min(self.display_limit, len(self.filtered_voices))
+        self.count_label.configure(text=f"Showing {showing} of {len(self.filtered_voices)} voices")
         self._render_voice_cards()
 
     def _render_voice_cards(self):
@@ -406,43 +421,50 @@ class VoiceManagerDialog(ctk.CTkToplevel):
             lbl.pack(pady=30)
             return
 
-        # Render top 45 matching cards for instant 60fps responsiveness
-        for v in self.filtered_voices[:45]:
+        visible_slice = self.filtered_voices[:self.display_limit]
+        for v in visible_slice:
+            # Lightweight card using single CTkFrame + grid to eliminate nested canvas overhead
             card = ctk.CTkFrame(self.voice_scroll, corner_radius=6)
-            card.pack(fill="x", pady=3, padx=2)
-
-            info_f = ctk.CTkFrame(card, fg_color="transparent")
-            info_f.pack(side="left", fill="x", expand=True, padx=8, pady=6)
+            card.pack(fill="x", pady=2, padx=2)
+            card.grid_columnconfigure(0, weight=1)
 
             tag = "[Kokoro ONNX]" if v["engine"] == "kokoro" else "[Edge Cloud]"
             color = "#f59e0b" if v["engine"] == "kokoro" else "#3b82f6"
 
             name_lbl = ctk.CTkLabel(
-                info_f, text=f"{v['name']} ", font=("Segoe UI", 12, "bold"), anchor="w"
+                card, text=f"{v['name']} ", font=("Segoe UI", 12, "bold"), anchor="w"
             )
-            name_lbl.pack(anchor="w")
+            name_lbl.grid(row=0, column=0, sticky="w", padx=10, pady=(4, 0))
 
             tag_lbl = ctk.CTkLabel(
-                info_f, text=f"{tag} · {v['gender']} · {v['desc']}",
+                card, text=f"{tag} · {v['gender']} · {v['desc']}",
                 font=("Segoe UI", 10), text_color=color, anchor="w"
             )
-            tag_lbl.pack(anchor="w")
-
-            btn_f = ctk.CTkFrame(card, fg_color="transparent")
-            btn_f.pack(side="right", padx=6, pady=6)
+            tag_lbl.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 4))
 
             btn_sample = ctk.CTkButton(
-                btn_f, text="▶ Sample", width=68, height=28, font=("Segoe UI", 11),
+                card, text="▶ Sample", width=68, height=26, font=("Segoe UI", 11),
                 fg_color="gray40", hover_color="gray50",
                 command=lambda item=v: self._play_sample(item)
             )
-            btn_sample.pack(side="left", padx=4)
+            btn_sample.grid(row=0, column=1, rowspan=2, padx=4, pady=4)
 
             btn_select = ctk.CTkButton(
-                btn_f, text="Select", width=62, height=28, font=("Segoe UI", 11, "bold"),
+                card, text="Select", width=62, height=26, font=("Segoe UI", 11, "bold"),
                 command=lambda item=v: self._select_voice(item)
             )
-            btn_select.pack(side="left", padx=4)
+            btn_select.grid(row=0, column=2, rowspan=2, padx=(4, 8), pady=4)
+
+        if len(self.filtered_voices) > self.display_limit:
+            rem = len(self.filtered_voices) - self.display_limit
+            btn_more = ctk.CTkButton(
+                self.voice_scroll,
+                text=f"Show More Voices ({rem} remaining) ▾",
+                height=30, font=("Segoe UI", 11),
+                fg_color="gray30", hover_color="gray40",
+                command=self._load_more_voices
+            )
+            btn_more.pack(fill="x", pady=6, padx=2)
 
     def _play_sample(self, voice_item):
         """Auditions a voice sample."""
@@ -606,7 +628,7 @@ class SpeechRulesDialog(ctk.CTkToplevel):
         super().__init__(parent)
         self.title("Speech & Pronunciation Rules - Speakaloud")
         self.geometry("780x640")
-        self.minsize(640, 500)
+        self.minsize(620, 480)
         self.parent = parent
         self.on_rules_changed = on_rules_changed
         self.editor_dialog = None
@@ -620,10 +642,16 @@ class SpeechRulesDialog(ctk.CTkToplevel):
         self._build_ui()
         self._refresh_rules()
 
+    def _update_dimensions_event(self, event=None):
+        """Ignore child widget configure events to prevent resize/drag lag."""
+        if event is not None and event.widget != self:
+            return
+        super()._update_dimensions_event(event)
+
     def _build_ui(self):
-        # Header
+        # 1. Header (Top)
         header = ctk.CTkFrame(self, height=70, corner_radius=0)
-        header.pack(fill="x", padx=14, pady=(12, 6))
+        header.pack(side="top", fill="x", padx=14, pady=(12, 6))
 
         h_left = ctk.CTkFrame(header, fg_color="transparent")
         h_left.pack(side="left", padx=10, pady=8)
@@ -648,9 +676,19 @@ class SpeechRulesDialog(ctk.CTkToplevel):
         )
         btn_reset.pack(side="left", padx=4)
 
-        # Interactive Live Rule Tester Box
+        # 2. Footer (Bottom - packed BEFORE scroll frame so it NEVER vanishes!)
+        footer = ctk.CTkFrame(self, height=38, fg_color="transparent")
+        footer.pack(side="bottom", fill="x", padx=14, pady=(2, 8))
+
+        self.lbl_count = ctk.CTkLabel(footer, text="", font=("Segoe UI", 11), text_color="gray60")
+        self.lbl_count.pack(side="left", padx=6)
+
+        btn_close = ctk.CTkButton(footer, text="Close", width=80, height=28, command=self.destroy)
+        btn_close.pack(side="right", padx=6)
+
+        # 3. Interactive Live Rule Tester Box (Top)
         test_box = ctk.CTkFrame(self, corner_radius=8, fg_color=("gray90", "#27272a"))
-        test_box.pack(fill="x", padx=14, pady=4)
+        test_box.pack(side="top", fill="x", padx=14, pady=4)
 
         t_header = ctk.CTkFrame(test_box, fg_color="transparent")
         t_header.pack(fill="x", padx=10, pady=(6, 2))
@@ -671,28 +709,18 @@ class SpeechRulesDialog(ctk.CTkToplevel):
         self.lbl_test_result = ctk.CTkLabel(test_box, text="", font=("Segoe UI", 11), text_color=("#10b981", "#34d399"), anchor="w")
         self.lbl_test_result.pack(fill="x", padx=12, pady=(0, 6))
 
-        # Search Bar
+        # 4. Search Bar (Top)
         search_f = ctk.CTkFrame(self, fg_color="transparent")
-        search_f.pack(fill="x", padx=14, pady=(6, 4))
+        search_f.pack(side="top", fill="x", padx=14, pady=(6, 4))
 
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *args: self._filter_rules())
         search_box = ctk.CTkEntry(search_f, textvariable=self.search_var, placeholder_text="🔍 Filter rules by pattern, word, or replacement...", height=32)
         search_box.pack(fill="x")
 
-        # Scrollable list of rules
+        # 5. Scrollable list of rules (Center - packed LAST with expand=True)
         self.rules_scroll = ctk.CTkScrollableFrame(self, corner_radius=8)
-        self.rules_scroll.pack(fill="both", expand=True, padx=14, pady=6)
-
-        # Footer
-        footer = ctk.CTkFrame(self, height=40, fg_color="transparent")
-        footer.pack(fill="x", padx=14, pady=6)
-
-        self.lbl_count = ctk.CTkLabel(footer, text="", font=("Segoe UI", 11), text_color="gray60")
-        self.lbl_count.pack(side="left", padx=6)
-
-        btn_close = ctk.CTkButton(footer, text="Close", width=80, command=self.destroy)
-        btn_close.pack(side="right", padx=6)
+        self.rules_scroll.pack(side="top", fill="both", expand=True, padx=14, pady=(2, 4))
 
         self._update_test_output()
 
@@ -770,11 +798,13 @@ class SpeechRulesDialog(ctk.CTkToplevel):
             return
 
         for r in self.filtered_rules:
+            # Lightweight card using grid layout
             card = ctk.CTkFrame(self.rules_scroll, corner_radius=6)
-            card.pack(fill="x", pady=3, padx=2)
+            card.pack(fill="x", pady=2, padx=2)
+            card.grid_columnconfigure(0, weight=1)
 
             info_f = ctk.CTkFrame(card, fg_color="transparent")
-            info_f.pack(side="left", fill="x", expand=True, padx=8, pady=6)
+            info_f.grid(row=0, column=0, sticky="w", padx=10, pady=5)
 
             title_f = ctk.CTkFrame(info_f, fg_color="transparent")
             title_f.pack(fill="x")
@@ -804,28 +834,25 @@ class SpeechRulesDialog(ctk.CTkToplevel):
             lbl_sub = ctk.CTkLabel(info_f, text=f"{badge_str} · {r.get('label', '')}", font=("Segoe UI", 10), text_color="gray60", anchor="w")
             lbl_sub.pack(anchor="w")
 
-            actions_f = ctk.CTkFrame(card, fg_color="transparent")
-            actions_f.pack(side="right", padx=8, pady=6)
-
-            sw = ctk.CTkSwitch(actions_f, text="Active", width=46)
+            sw = ctk.CTkSwitch(card, text="Active", width=46)
             if r.get("enabled", True):
                 sw.select()
             else:
                 sw.deselect()
             sw.configure(command=lambda rule=r, switch=sw: self._toggle_rule(rule, bool(switch.get())))
-            sw.pack(side="left", padx=8)
+            sw.grid(row=0, column=1, padx=6)
 
             btn_edit = ctk.CTkButton(
-                actions_f, text="✏️", width=34, height=28, fg_color="gray30", hover_color="gray40",
+                card, text="✏️", width=34, height=28, fg_color="gray30", hover_color="gray40",
                 command=lambda rule=r: self._open_edit_rule(rule)
             )
-            btn_edit.pack(side="left", padx=3)
+            btn_edit.grid(row=0, column=2, padx=3)
 
             btn_del = ctk.CTkButton(
-                actions_f, text="🗑️", width=34, height=28, fg_color="#ef4444", hover_color="#dc2626",
+                card, text="🗑️", width=34, height=28, fg_color="#ef4444", hover_color="#dc2626",
                 command=lambda rule=r: self._delete_rule(rule)
             )
-            btn_del.pack(side="left", padx=3)
+            btn_del.grid(row=0, column=3, padx=(3, 10))
 
     def _open_add_rule(self):
         if self.editor_dialog and self.editor_dialog.winfo_exists():
