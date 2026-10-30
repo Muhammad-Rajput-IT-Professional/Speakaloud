@@ -32,7 +32,7 @@ DEFAULT_RULES = [
         "pattern": r"\bS\.?A\.?W\.?\b",
         "replacement": "peace be upon him",
         "match_whole_word": True,
-        "case_sensitive": False,
+        "case_sensitive": True,
         "enabled": True
     },
     {
@@ -62,7 +62,7 @@ DEFAULT_RULES = [
         "pattern": r"\bR\.?A\.?\b",
         "replacement": "radiyallahu anhu",
         "match_whole_word": True,
-        "case_sensitive": False,
+        "case_sensitive": True,
         "enabled": True
     },
     {
@@ -72,7 +72,7 @@ DEFAULT_RULES = [
         "pattern": r"\bA\.?S\.?\b",
         "replacement": "alayhis salam",
         "match_whole_word": True,
-        "case_sensitive": False,
+        "case_sensitive": True,
         "enabled": True
     },
     {
