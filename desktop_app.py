@@ -21,6 +21,19 @@ from PIL import Image, ImageTk, ImageChops, ImageDraw
 import sounddevice as sd
 import soundfile as sf
 
+# Suppress PyMuPDF C++ warnings/errors to stderr (e.g. Screen annotations)
+try:
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    pymupdf.TOOLS.mupdf_display_warnings(False)
+except Exception:
+    pass
+
+# Set low latency for sounddevice so hardware output buffer opens in ~90ms
+try:
+    sd.default.latency = ('low', 'low')
+except Exception:
+    pass
+
 # Project roots and directories
 ROOT_DIR = Path(__file__).resolve().parent
 
@@ -3037,10 +3050,19 @@ class SpeakaloudDesktopApp(ctk.CTk):
     def _find_word_at_coords(self, page_idx: int, px: float, py: float) -> Optional[Tuple[int, int, Dict[str, Any]]]:
         sentences = self._get_page_sentences(page_idx)
         for s in sentences:
-            for w in s.get("words", []):
+            words = s.get("words", [])
+            if not words:
+                continue
+            # Direct word hit-test with comfortable touch/click tolerance (5px X, 4px Y)
+            for w in words:
                 x0, y0, x1, y1 = w["bbox"]
-                if x0 - 2 <= px <= x1 + 2 and y0 - 2 <= py <= y1 + 2:
+                if x0 - 5 <= px <= x1 + 5 and y0 - 4 <= py <= y1 + 4:
                     return s["s_idx"], w["w_idx"], w
+            # Margin hit: if user clicks just to the left of the sentence's first word, select word 0
+            first_w = words[0]
+            fx0, fy0, fx1, fy1 = first_w["bbox"]
+            if (fx0 - 35) <= px < fx0 and (fy0 - 4) <= py <= (fy1 + 4):
+                return s["s_idx"], 0, first_w
         return None
 
     def _on_canvas_mouse_move(self, event):
@@ -3238,9 +3260,20 @@ class SpeakaloudDesktopApp(ctk.CTk):
                     else:
                         pct = int((speed - 1.0) * 100)
                         rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
-                        tts_data = loop.run_until_complete(
-                            synthesize_text(text, voice=voice_key, rate=rate_str)
-                        )
+                        try:
+                            tts_data = loop.run_until_complete(
+                                synthesize_text(text, voice=voice_key, rate=rate_str)
+                            )
+                        except Exception as edge_err:
+                            print(f"[EdgeTTS] Connection error ({edge_err}), falling back to offline Kokoro")
+                            if is_kokoro_downloaded():
+                                is_male = any(m in voice_key.lower() for m in ["guy", "christopher", "eric", "ryan", "andrew", "brian"])
+                                fb_voice = "am_adam" if is_male else "af_bella"
+                                tts_data = loop.run_until_complete(
+                                    synthesize_kokoro(text, voice_key=fb_voice, speed=speed)
+                                )
+                            else:
+                                raise edge_err
                     if tts_data:
                         self.prefetch_cache[cache_key] = tts_data
                 finally:

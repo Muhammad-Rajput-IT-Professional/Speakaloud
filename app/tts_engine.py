@@ -145,33 +145,47 @@ async def synthesize_text(
         except Exception as e:
             print(f"[TTS] Cache read error for {cache_id}: {e}")
 
-    # 3. Call Microsoft Edge Cloud Voices via edge_tts
-    comm = edge_tts.Communicate(
-        text=speech_text,
-        voice=voice,
-        rate=rate,
-        pitch=pitch,
-        volume=volume,
-        boundary="WordBoundary"
-    )
-
+    # 3. Call Microsoft Edge Cloud Voices via edge_tts with automatic retry for resilience
+    max_retries = 2
     audio_buffer = bytearray()
     word_boundaries = []
 
-    async for chunk in comm.stream():
-        chunk_type = chunk.get("type")
-        if chunk_type == "audio":
-            audio_buffer.extend(chunk.get("data", b""))
-        elif chunk_type == "WordBoundary":
-            # offset and duration in 100ns units -> convert to milliseconds
-            offset_ms = chunk.get("offset", 0) / 10000.0
-            duration_ms = chunk.get("duration", 0) / 10000.0
-            word_boundaries.append({
-                "word": chunk.get("text", ""),
-                "offset_ms": round(offset_ms, 2),
-                "duration_ms": round(duration_ms, 2),
-                "end_ms": round(offset_ms + duration_ms, 2)
-            })
+    for attempt in range(max_retries):
+        try:
+            comm = edge_tts.Communicate(
+                text=speech_text,
+                voice=voice,
+                rate=rate,
+                pitch=pitch,
+                volume=volume,
+                boundary="WordBoundary",
+                receive_timeout=15
+            )
+            audio_buffer.clear()
+            word_boundaries.clear()
+
+            async for chunk in comm.stream():
+                chunk_type = chunk.get("type")
+                if chunk_type == "audio":
+                    audio_buffer.extend(chunk.get("data", b""))
+                elif chunk_type == "WordBoundary":
+                    # offset and duration in 100ns units -> convert to milliseconds
+                    offset_ms = chunk.get("offset", 0) / 10000.0
+                    duration_ms = chunk.get("duration", 0) / 10000.0
+                    word_boundaries.append({
+                        "word": chunk.get("text", ""),
+                        "offset_ms": round(offset_ms, 2),
+                        "duration_ms": round(duration_ms, 2),
+                        "end_ms": round(offset_ms + duration_ms, 2)
+                    })
+            if audio_buffer:
+                break
+        except Exception as conn_err:
+            if attempt < max_retries - 1:
+                print(f"[EdgeTTS] Connection glitch ({conn_err}), retrying...")
+                await asyncio.sleep(0.5)
+            else:
+                raise conn_err
 
     # 4. Save to cache
     try:

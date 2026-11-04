@@ -264,8 +264,8 @@ def get_piper_instance(voice_key: str):
 def estimate_word_boundaries(
     text: str,
     total_duration_sec: float,
-    lead_in_ms: float = 140.0,
-    trail_ms: float = 220.0
+    lead_in_ms: float = 300.0,
+    trail_ms: float = 250.0
 ) -> List[Dict[str, Any]]:
     """Calculates clean proportional word boundary timestamps for synchronized highlighting."""
     words = text.strip().split()
@@ -351,7 +351,7 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
     if not speech_text.strip():
         return {"audio_url": None, "word_boundaries": [], "speech_text": "", "is_empty": True}
 
-    cache_hash = hashlib.sha256(f"kokoro_v2|{speech_text}|{voice_key}|{speed}".encode()).hexdigest()[:20]
+    cache_hash = hashlib.sha256(f"kokoro_v3|{speech_text}|{voice_key}|{speed}".encode()).hexdigest()[:20]
     out_wav = CACHE_DIR / f"{cache_hash}.wav"
     out_mp3 = CACHE_DIR / f"{cache_hash}.mp3"
     meta_json = CACHE_DIR / f"{cache_hash}.json"
@@ -377,7 +377,7 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
         all_samples = []
         sr = 24000
         # Prepend 140ms lead-in silence so audio hardware DAC spools up cleanly without clipping word 1
-        lead_silence = np.zeros(int(sr * 0.14), dtype=np.float32)
+        lead_silence = np.zeros(int(sr * 0.30), dtype=np.float32)
         all_samples.append(lead_silence)
 
         for i, c in enumerate(chunks):
@@ -389,7 +389,7 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
                 all_samples.append(silence)
 
         # Append 220ms trailing silence so final words are never chopped by playback end/transitions
-        trail_silence = np.zeros(int(sr * 0.22), dtype=np.float32)
+        trail_silence = np.zeros(int(sr * 0.25), dtype=np.float32)
         all_samples.append(trail_silence)
 
         if not all_samples:
@@ -402,7 +402,7 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
     sf.write(str(out_wav), samples, sample_rate, format="WAV")
 
     duration_sec = len(samples) / float(sample_rate)
-    boundaries = estimate_word_boundaries(speech_text, duration_sec, lead_in_ms=140.0, trail_ms=220.0)
+    boundaries = estimate_word_boundaries(speech_text, duration_sec, lead_in_ms=300.0, trail_ms=250.0)
 
     with open(meta_json, "w", encoding="utf-8") as f:
         json.dump({"word_boundaries": boundaries, "duration_sec": duration_sec}, f, indent=2)
@@ -426,7 +426,7 @@ async def synthesize_piper(text: str, voice_key: str = "en_US-lessac-medium", sp
     if not speech_text.strip():
         return {"audio_url": None, "word_boundaries": [], "is_empty": True}
 
-    cache_hash = hashlib.sha256(f"piper_v2|{speech_text}|{voice_key}|{speed}".encode()).hexdigest()[:20]
+    cache_hash = hashlib.sha256(f"piper_v3|{speech_text}|{voice_key}|{speed}".encode()).hexdigest()[:20]
     out_file = CACHE_DIR / f"{cache_hash}.wav"
     meta_json = CACHE_DIR / f"{cache_hash}.json"
 
@@ -454,14 +454,14 @@ async def synthesize_piper(text: str, voice_key: str = "en_US-lessac-medium", sp
             raw_tmp.unlink(missing_ok=True)
         except Exception:
             pass
-        lead = np.zeros(int(sr * 0.14), dtype=np.float32)
-        trail = np.zeros(int(sr * 0.22), dtype=np.float32)
+        lead = np.zeros(int(sr * 0.30), dtype=np.float32)
+        trail = np.zeros(int(sr * 0.25), dtype=np.float32)
         padded = np.concatenate([lead, data, trail])
         sf.write(str(out_file), padded, sr, format="WAV")
         return len(padded) / float(sr)
 
     duration_sec = await loop.run_in_executor(None, generate_piper)
-    boundaries = estimate_word_boundaries(speech_text, duration_sec, lead_in_ms=140.0, trail_ms=220.0)
+    boundaries = estimate_word_boundaries(speech_text, duration_sec, lead_in_ms=300.0, trail_ms=250.0)
 
     with open(meta_json, "w", encoding="utf-8") as f:
         json.dump({"word_boundaries": boundaries, "duration_sec": duration_sec}, f, indent=2)
