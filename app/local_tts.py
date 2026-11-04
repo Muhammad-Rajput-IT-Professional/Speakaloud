@@ -79,7 +79,12 @@ _PIPER_INSTANCES: Dict[str, Any] = {}
 def is_kokoro_downloaded() -> bool:
     model_path = KOKORO_DIR / "kokoro-v1.0.onnx"
     voices_path = KOKORO_DIR / "voices-v1.0.bin"
-    return model_path.exists() and voices_path.exists() and model_path.stat().st_size > 50_000_000
+    return (
+        model_path.exists() and 
+        voices_path.exists() and 
+        model_path.stat().st_size > 300_000_000 and 
+        voices_path.stat().st_size > 25_000_000
+    )
 
 
 def is_piper_voice_downloaded(voice_key: str) -> bool:
@@ -161,9 +166,19 @@ def start_download_task(engine: str, voice_key: Optional[str] = None) -> Dict[st
                 model_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
                 voices_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
                 
+                model_dest = KOKORO_DIR / "kokoro-v1.0.onnx"
+                voices_dest = KOKORO_DIR / "voices-v1.0.bin"
+                model_tmp = KOKORO_DIR / "kokoro-v1.0.onnx.tmp"
+                voices_tmp = KOKORO_DIR / "voices-v1.0.bin.tmp"
+
                 # Model is 92% of payload, voices is 8%
-                download_file(model_url, KOKORO_DIR / "kokoro-v1.0.onnx", "kokoro", sub_weight=0.92, sub_offset=0.0)
-                download_file(voices_url, KOKORO_DIR / "voices-v1.0.bin", "kokoro", sub_weight=0.08, sub_offset=92.0)
+                download_file(model_url, model_tmp, "kokoro", sub_weight=0.92, sub_offset=0.0)
+                if model_tmp.stat().st_size > 300_000_000:
+                    model_tmp.replace(model_dest)
+
+                download_file(voices_url, voices_tmp, "kokoro", sub_weight=0.08, sub_offset=92.0)
+                if voices_tmp.stat().st_size > 25_000_000:
+                    voices_tmp.replace(voices_dest)
                 
                 _DOWNLOAD_PROGRESS["kokoro"] = {"status": "ready", "percent": 100.0}
             except Exception as e:
@@ -332,10 +347,12 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
         return {"audio_url": None, "word_boundaries": [], "speech_text": "", "is_empty": True}
 
     cache_hash = hashlib.sha256(f"kokoro|{speech_text}|{voice_key}|{speed}".encode()).hexdigest()[:20]
+    out_wav = CACHE_DIR / f"{cache_hash}.wav"
     out_mp3 = CACHE_DIR / f"{cache_hash}.mp3"
     meta_json = CACHE_DIR / f"{cache_hash}.json"
 
-    if out_mp3.exists() and meta_json.exists():
+    # Check cache (either WAV or MP3)
+    if (out_wav.exists() or out_mp3.exists()) and meta_json.exists():
         with open(meta_json, "r", encoding="utf-8") as f:
             cached = json.load(f)
         return {
@@ -367,18 +384,8 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
 
     samples, sample_rate = await loop.run_in_executor(None, generate_kokoro)
 
-    # Save to audio file
-    temp_wav = CACHE_DIR / f"{cache_hash}.wav"
-    sf.write(str(temp_wav), samples, sample_rate, format="WAV")
-
-    # Transcode or keep as mp3
-    import subprocess
-    try:
-        subprocess.run(f"ffmpeg -y -i \"{temp_wav}\" -codec:a libmp3lame -b:a 128k \"{out_mp3}\"", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if temp_wav.exists() and out_mp3.exists():
-            temp_wav.unlink()
-    except Exception:
-        out_mp3 = temp_wav
+    # Save directly to native WAV (instant, zero transcoding overhead or ffmpeg dependency)
+    sf.write(str(out_wav), samples, sample_rate, format="WAV")
 
     duration_sec = len(samples) / float(sample_rate)
     boundaries = estimate_word_boundaries(speech_text, duration_sec)

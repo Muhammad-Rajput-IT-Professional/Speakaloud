@@ -29,7 +29,7 @@ from app.config import (
     APP_DATA_DIR, DATA_DIR, CACHE_DIR, UPLOADS_DIR, NOTEPAD_DRAFT_FILE, MODELS_DIR
 )
 from app.tts_engine import synthesize_text, get_all_voices
-from app.local_tts import synthesize_kokoro, is_kokoro_downloaded, KOKORO_VOICES
+from app.local_tts import synthesize_kokoro, is_kokoro_downloaded, get_kokoro_instance, KOKORO_VOICES
 from app.speech_rules import rule_engine
 from app.state_manager import state_manager
 
@@ -280,11 +280,15 @@ class VoiceManagerDialog(ctk.CTkToplevel):
 
             if not kokoro_installed or models_mb < 1.0:
                 self.btn_delete_models.configure(
-                    text="Local Models: None", state="disabled", fg_color="gray40"
+                    text="📥 Download Kokoro AI (88 MB)", state="normal",
+                    fg_color="#0284c7", hover_color="#0369a1",
+                    command=self._start_kokoro_download
                 )
             else:
                 self.btn_delete_models.configure(
-                    text=f"🗑️ Delete Models ({models_mb:.0f} MB)", state="normal", fg_color="#991b1b"
+                    text=f"🗑️ Delete Models ({models_mb:.0f} MB)", state="normal",
+                    fg_color="#991b1b", hover_color="#7f1d1d",
+                    command=self._confirm_delete_models
                 )
 
             if cache_count == 0:
@@ -293,6 +297,46 @@ class VoiceManagerDialog(ctk.CTkToplevel):
                 self.btn_clear_cache.configure(state="normal")
         except Exception as e:
             print(f"[Storage] Refresh error: {e}")
+
+    def _start_kokoro_download(self):
+        """Starts background download of Kokoro model files with live percentage tracking."""
+        from app.local_tts import start_download_task, _DOWNLOAD_PROGRESS
+        start_download_task("kokoro")
+        self.btn_delete_models.configure(text="⏳ Starting download...", state="disabled")
+
+        def _poll_download():
+            if not self.winfo_exists():
+                return
+            prog = _DOWNLOAD_PROGRESS.get("kokoro", {})
+            status = prog.get("status", "downloading")
+            pct = prog.get("percent", 0.0)
+
+            if status == "downloading":
+                self.btn_delete_models.configure(text=f"⏳ Downloading ({pct:.0f}%)...")
+                self.lbl_storage_info.configure(text=f"📥 Downloading Kokoro AI Neural Model: {pct:.1f}%")
+                self.after(250, _poll_download)
+            elif status == "ready":
+                self._refresh_storage_ui()
+                # Update voices catalog installed status
+                for item in self.all_voices:
+                    if item.get("engine") == "kokoro":
+                        item["installed"] = True
+                self._apply_filter()
+                messagebox.showinfo(
+                    "Kokoro AI Ready",
+                    "Kokoro-82M neural model files downloaded successfully!\n\n"
+                    "All local high-quality voices (Adam, Sarah, Bella, Michael, etc.) are now fully ready to use offline.",
+                    parent=self
+                )
+            elif status == "error":
+                self._refresh_storage_ui()
+                messagebox.showerror(
+                    "Download Error",
+                    f"Could not download Kokoro AI model:\n{prog.get('error', 'Network error')}",
+                    parent=self
+                )
+
+        self.after(250, _poll_download)
 
     def _calc_cache_stats(self) -> Tuple[float, int]:
         if not CACHE_DIR.exists():
@@ -444,9 +488,9 @@ class VoiceManagerDialog(ctk.CTkToplevel):
 
             btn_sample = ctk.CTkButton(
                 card, text="▶ Sample", width=68, height=26, font=("Segoe UI", 11),
-                fg_color="gray40", hover_color="gray50",
-                command=lambda item=v: self._play_sample(item)
+                fg_color="gray40", hover_color="gray50"
             )
+            btn_sample.configure(command=lambda item=v, b=btn_sample: self._play_sample(item, b))
             btn_sample.grid(row=0, column=1, rowspan=2, padx=4, pady=4)
 
             btn_select = ctk.CTkButton(
@@ -466,12 +510,28 @@ class VoiceManagerDialog(ctk.CTkToplevel):
             )
             btn_more.pack(fill="x", pady=6, padx=2)
 
-    def _play_sample(self, voice_item):
+    def _play_sample(self, voice_item, btn_widget=None):
         """Auditions a voice sample."""
         try:
             self.parent._stop_audio()
         except Exception:
             pass
+
+        if voice_item["engine"] == "kokoro" and not is_kokoro_downloaded():
+            ans = messagebox.askyesno(
+                "Download Kokoro AI",
+                "Kokoro local neural voice models (~88 MB) are not yet installed on this PC.\n\n"
+                "Would you like to download them now to enable offline local voices?",
+                parent=self
+            )
+            if ans:
+                self._start_kokoro_download()
+            return
+
+        orig_text = "▶ Sample"
+        if btn_widget and btn_widget.winfo_exists():
+            orig_text = btn_widget.cget("text")
+            btn_widget.configure(text="⏳ ...", state="disabled")
 
         def worker():
             try:
@@ -488,17 +548,32 @@ class VoiceManagerDialog(ctk.CTkToplevel):
                 if res and res.get("cache_id"):
                     mp3_p = CACHE_DIR / f"{res['cache_id']}.mp3"
                     wav_p = CACHE_DIR / f"{res['cache_id']}.wav"
-                    aud_p = mp3_p if mp3_p.exists() else wav_p
+                    aud_p = wav_p if wav_p.exists() else mp3_p
                     if aud_p.exists():
                         data, sr = sf.read(str(aud_p), dtype="float32")
                         sd.stop()
                         sd.play(data, sr)
             except Exception as e:
                 print(f"[VoiceDialog] Sample audition error: {e}")
+            finally:
+                if btn_widget and self.winfo_exists():
+                    self.after(0, lambda: btn_widget.configure(text=orig_text, state="normal") if btn_widget.winfo_exists() else None)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _select_voice(self, voice_item):
+        if voice_item["engine"] == "kokoro" and not is_kokoro_downloaded():
+            ans = messagebox.askyesno(
+                "Download Kokoro AI",
+                f"You selected '{voice_item['name']}'.\n\n"
+                "Kokoro local neural voice models (~88 MB) need to be downloaded once to speak offline.\n\n"
+                "Download now?",
+                parent=self
+            )
+            if ans:
+                self._start_kokoro_download()
+            return
+
         self.on_select_voice(voice_item)
         self.destroy()
 
@@ -931,6 +1006,10 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.active_engine: str = self.settings.get("engine", "cloud")  # 'cloud' | 'kokoro'
         self.active_voice_key: str = self.settings.get("voice", "en-US-JennyNeural")
         self.active_voice_name: str = _resolve_voice_name(self.active_voice_key, self.active_engine)
+
+        # Pre-warm Kokoro neural session in background if active
+        if self.active_engine == "kokoro" and is_kokoro_downloaded():
+            threading.Thread(target=get_kokoro_instance, daemon=True).start()
 
         # Playback State & Thread Safety
         self.is_playing: bool = False
@@ -1996,6 +2075,9 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.prefetch_cache.clear()
         state_manager.update_settings({"engine": self.active_engine, "voice": self.active_voice_key})
 
+        if self.active_engine == "kokoro" and is_kokoro_downloaded():
+            threading.Thread(target=get_kokoro_instance, daemon=True).start()
+
         if self.is_playing:
             self.play_sentence(self.current_sentence_idx, self.current_word_idx)
 
@@ -2230,6 +2312,9 @@ class SpeakaloudDesktopApp(ctk.CTk):
             )
             self.scrubber_slider.set(0)
             self._set_status(f"Page {page_idx + 1} loaded ({len(self.sentences)} sentences). Click any word to read.")
+
+            # Pre-warm Kokoro / Edge voice and prefetch opening sentence in background
+            self._prefetch_upcoming(-1)
 
         # Auto-prune stale audio clips every 3 pages so disk space stays minimal
         self.page_turns_since_cleanup += 1
@@ -3059,7 +3144,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
     def _prefetch_upcoming(self, current_idx: int):
         """Pre-synthesizes upcoming sentences in background to ensure zero pause between sentences."""
         def worker():
-            for offset in [1, 2]:
+            for offset in [1, 2, 3]:
                 next_idx = current_idx + offset
                 if next_idx < len(self.sentences):
                     sentence = self.sentences[next_idx]
@@ -3142,10 +3227,13 @@ class SpeakaloudDesktopApp(ctk.CTk):
                                 synthesize_kokoro(text, voice_key=voice_key, speed=speed)
                             )
                         except Exception as k_err:
+                            print(f"[Kokoro] Synthesis error: {k_err}, falling back to Edge TTS")
                             pct = int((speed - 1.0) * 100)
                             rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
+                            is_male = voice_key.startswith(("am_", "bm_", "em_", "hm_", "im_", "jm_", "pm_", "zm_"))
+                            fallback_voice = "en-US-GuyNeural" if is_male else "en-US-JennyNeural"
                             tts_data = loop.run_until_complete(
-                                synthesize_text(text, voice="en-US-JennyNeural", rate=rate_str)
+                                synthesize_text(text, voice=fallback_voice, rate=rate_str)
                             )
                     else:
                         pct = int((speed - 1.0) * 100)
