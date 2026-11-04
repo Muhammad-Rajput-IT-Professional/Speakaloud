@@ -923,6 +923,9 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.sentences: List[Dict[str, Any]] = []
         self.zoom_scale: float = 1.35
         self.zoom_mode: str = "fit-width"
+        self.view_mode: str = self.settings.get("view_mode", "single")  # 'single' | 'continuous'
+        self.continuous_page_layouts: List[Dict[str, Any]] = []
+        self.page_sentences_cache: Dict[int, List[Dict[str, Any]]] = {}
 
         # Active Engine & Voice
         self.active_engine: str = self.settings.get("engine", "cloud")  # 'cloud' | 'kokoro'
@@ -1079,6 +1082,17 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.btn_zoom_in = ctk.CTkButton(self.zoom_frame, text="＋", width=28, height=30, command=self._zoom_in)
         self.btn_zoom_in.pack(side="left", padx=2)
 
+        # View Mode Segmented Control (Single Page vs Continuous Flow)
+        self.view_mode_seg = ctk.CTkSegmentedButton(
+            self.pdf_header_frame,
+            values=["📄 Single", "📜 Continuous"],
+            command=self._on_view_mode_toggle,
+            height=30,
+            font=("Segoe UI", 11)
+        )
+        self.view_mode_seg.set("📜 Continuous" if self.view_mode == "continuous" else "📄 Single")
+        self.view_mode_seg.pack(side="left", padx=(8, 4))
+
         # Notepad Header Controls (shown in notepad mode)
         self.notepad_header_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
         self.notepad_title_label = ctk.CTkLabel(
@@ -1190,13 +1204,16 @@ class SpeakaloudDesktopApp(ctk.CTk):
         )
         self.pdf_canvas.pack(side="left", fill="both", expand=True)
 
-        self.canvas_scroll_y.config(command=self.pdf_canvas.yview)
+        self.canvas_scroll_y.config(command=self._on_y_scroll)
         self.canvas_scroll_x.config(command=self.pdf_canvas.xview)
 
-        # Mouse Events on Canvas
+        # Mouse & Gesture Events on Canvas (Ctrl+Wheel Zoom, Click to Play, Scroll)
         self.pdf_canvas.bind("<Motion>", self._on_canvas_mouse_move)
         self.pdf_canvas.bind("<Button-1>", self._on_canvas_mouse_click)
         self.pdf_canvas.bind("<MouseWheel>", self._on_mouse_wheel)
+        self.pdf_canvas.bind("<Control-MouseWheel>", self._on_ctrl_mouse_wheel)
+        self.pdf_canvas.bind("<Shift-MouseWheel>", self._on_shift_mouse_wheel)
+        self.pdf_canvas.bind("<Configure>", self._on_canvas_configure)
 
         # Center Notepad Viewport (built and initialized)
         self.notepad_center_frame = ctk.CTkFrame(self.main_container, corner_radius=0, fg_color=("gray92", "#18181b"))
@@ -1893,6 +1910,10 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.bind("<plus>", lambda e: self._zoom_in())
         self.bind("<equal>", lambda e: self._zoom_in())
         self.bind("<minus>", lambda e: self._zoom_out())
+        self.bind("<Control-plus>", lambda e: self._zoom_in())
+        self.bind("<Control-equal>", lambda e: self._zoom_in())
+        self.bind("<Control-minus>", lambda e: self._zoom_out())
+        self.bind("<Control-0>", lambda e: self._zoom_fit_width())
 
     def _toggle_sidebar(self):
         if self.sidebar_visible:
@@ -2018,6 +2039,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.current_doc_id = None
         self.sentences = []
         self.page_words = []
+        self.continuous_page_layouts.clear()
+        self.page_sentences_cache.clear()
         self.pdf_canvas.delete("all")
         self.doc_title_label.configure(text="No document open")
         self.total_pages_label.configure(text="/ 0")
@@ -2042,6 +2065,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.doc = pymupdf.open(str(p))
             self.total_pages = len(self.doc)
             self.current_page_idx = min(max(0, start_page), self.total_pages - 1)
+            self.continuous_page_layouts.clear()
+            self.page_sentences_cache.clear()
 
             entry = state_manager.register_document(
                 doc_id=p.stem,
@@ -2143,9 +2168,35 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 self.toc_scroll, text=f"{'  ' * (lvl - 1)}{title} (p.{page + 1})",
                 anchor="w", height=26, font=("Segoe UI", 11), fg_color="transparent",
                 hover_color=("gray80", "gray30"), text_color=("gray10", "gray90"),
-                command=lambda pg=page: self._load_page(pg)
+                command=lambda pg=page: self._jump_to_toc_page(pg)
             )
             btn.pack(fill="x", pady=1)
+
+    def _jump_to_toc_page(self, page_idx: int):
+        if self.view_mode == "continuous":
+            self.current_page_idx = page_idx
+            self.sentences = self._get_page_sentences(page_idx)
+            self.page_entry.delete(0, "end")
+            self.page_entry.insert(0, str(page_idx + 1))
+            self._scroll_to_page(page_idx)
+        else:
+            self._load_page(page_idx)
+
+    def _get_page_sentences(self, page_idx: int) -> List[Dict[str, Any]]:
+        """Returns parsed sentences for page_idx, caching results for instant navigation."""
+        if not self.doc or page_idx < 0 or page_idx >= self.total_pages:
+            return []
+        if page_idx in self.page_sentences_cache:
+            return self.page_sentences_cache[page_idx]
+        try:
+            page = self.doc[page_idx]
+            raw_words = page.get_text("words")
+            sentences = self._group_words_into_sentences(raw_words)
+            self.page_sentences_cache[page_idx] = sentences
+            return sentences
+        except Exception as e:
+            print(f"[PDF] Error extracting sentences for page {page_idx}: {e}")
+            return []
 
     def _load_page(self, page_idx: int):
         """Loads and parses sentences and words for page_idx."""
@@ -2167,10 +2218,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         if self.current_doc_id:
             state_manager.update_progress(self.current_doc_id, page_idx, 0)
 
-        page = self.doc[page_idx]
-        raw_words = page.get_text("words")
-        self.page_words = raw_words
-        self.pdf_sentences = self._group_words_into_sentences(raw_words)
+        self.pdf_sentences = self._get_page_sentences(page_idx)
 
         if self.app_mode == "pdf":
             self.sentences = self.pdf_sentences
@@ -2189,7 +2237,12 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.page_turns_since_cleanup = 0
             self._auto_prune_audio_cache()
 
-        self._render_current_page()
+        if self.view_mode == "continuous":
+            if not self.continuous_page_layouts:
+                self._render_continuous_view()
+            self._scroll_to_page(page_idx)
+        else:
+            self._render_single_page_view()
 
     def _auto_prune_audio_cache(self):
         """Automatically prunes stale audio cache files in background every 3 pages."""
@@ -2297,8 +2350,48 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
         return sentences
 
+    def _on_view_mode_toggle(self, selected_mode: str):
+        """Switches between Single Page and Continuous Flow views."""
+        new_mode = "continuous" if "Continuous" in selected_mode else "single"
+        if new_mode == self.view_mode:
+            return
+        self.view_mode = new_mode
+        state_manager.update_settings({"view_mode": self.view_mode})
+        if self.doc:
+            self._render_pdf_view()
+            if self.view_mode == "continuous":
+                self._scroll_to_page(self.current_page_idx)
+
     def _render_current_page(self):
-        """Renders the PDF page to canvas with exact zoom scaling."""
+        """Renders the PDF view (Single Page or Continuous scroll)."""
+        self._render_pdf_view()
+
+    def _render_pdf_view(self):
+        """Unified entry point for PDF rendering."""
+        if not self.doc:
+            return
+
+        cur_y_ratio = 0.0
+        try:
+            cur_y_ratio = self.pdf_canvas.yview()[0]
+        except Exception:
+            pass
+
+        if self.view_mode == "continuous":
+            self._render_continuous_view()
+        else:
+            self._render_single_page_view()
+
+        if cur_y_ratio > 0.0:
+            try:
+                self.pdf_canvas.yview_moveto(cur_y_ratio)
+            except Exception:
+                pass
+            if self.view_mode == "continuous":
+                self._update_continuous_viewport()
+
+    def _render_single_page_view(self):
+        """Renders a single PDF page to canvas centered with exact zoom scaling."""
         if not self.doc:
             return
 
@@ -2327,15 +2420,179 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.current_photo = ImageTk.PhotoImage(img)
 
         self.pdf_canvas.delete("all")
+        page_x = max(20.0, (canvas_width - pix.width) / 2.0)
         self.canvas_img_id = self.pdf_canvas.create_image(
-            20, 20, image=self.current_photo, anchor="nw"
+            page_x, 20, image=self.current_photo, anchor="nw"
         )
-        self.pdf_canvas.config(scrollregion=(0, 0, pix.width + 40, pix.height + 40))
+        self.pdf_canvas.config(scrollregion=(0, 0, max(canvas_width, pix.width + 40), pix.height + 40))
 
         # Re-apply sentence highlight if currently playing
         if self.is_playing and 0 <= self.current_sentence_idx < len(self.sentences):
             self.current_highlighted_word_idx = None
             self._highlight_sentence(self.current_sentence_idx, self.current_word_idx)
+
+    def _render_continuous_view(self):
+        """Sets up virtualized continuous vertical layout for all document pages."""
+        if not self.doc:
+            return
+
+        canvas_width = max(600, self.pdf_canvas.winfo_width())
+        if canvas_width <= 1:
+            canvas_width = 800
+
+        if self.zoom_mode == "fit-width":
+            ref_idx = min(self.current_page_idx, self.total_pages - 1)
+            ref_w = max(1.0, float(self.doc[ref_idx].rect.width))
+            self.zoom_scale = (canvas_width - 60) / ref_w
+        self.zoom_scale = max(0.2, min(3.0, self.zoom_scale))
+
+        self.pdf_canvas.delete("all")
+        self.continuous_page_layouts = []
+        PAGE_GAP = 20
+        current_y = 20.0
+        max_pw = 0.0
+
+        for p_idx in range(self.total_pages):
+            rect = self.doc[p_idx].rect
+            pw = float(rect.width) * self.zoom_scale
+            ph = float(rect.height) * self.zoom_scale
+            if pw > max_pw:
+                max_pw = pw
+            page_x = max(20.0, (canvas_width - pw) / 2.0)
+            layout = {
+                "page_idx": p_idx,
+                "rect": rect,
+                "x": page_x,
+                "y": current_y,
+                "w": pw,
+                "h": ph,
+                "bottom": current_y + ph,
+                "canvas_img_id": None,
+                "canvas_rect_id": None,
+                "photo": None,
+                "base_img": None,
+                "is_rendered": False
+            }
+            self.continuous_page_layouts.append(layout)
+            current_y += ph + PAGE_GAP
+
+        total_canvas_h = current_y + 40.0
+        total_canvas_w = max(canvas_width, max_pw + 40.0)
+        self.pdf_canvas.config(scrollregion=(0, 0, total_canvas_w, total_canvas_h))
+
+        self._update_continuous_viewport()
+
+        if self.is_playing and 0 <= self.current_sentence_idx < len(self.sentences):
+            self.current_highlighted_word_idx = None
+            self._highlight_sentence(self.current_sentence_idx, self.current_word_idx)
+
+    def _update_continuous_viewport(self):
+        """Efficiently renders only visible and nearby buffer pages, keeping memory lean."""
+        if self.view_mode != "continuous" or not self.continuous_page_layouts or not self.doc:
+            return
+
+        c_height = max(400, self.pdf_canvas.winfo_height())
+        vis_top = self.pdf_canvas.canvasy(0)
+        vis_bottom = vis_top + c_height
+
+        # Buffer zone: keep rendered pages 1.5 screens above and below viewport for instant scrolling
+        buffer_px = c_height * 1.5
+        active_top = vis_top - buffer_px
+        active_bottom = vis_bottom + buffer_px
+
+        center_y = (vis_top + vis_bottom) / 2.0
+        centered_page_idx = None
+
+        for layout in self.continuous_page_layouts:
+            p_idx = layout["page_idx"]
+            is_visible = (layout["bottom"] >= active_top and layout["y"] <= active_bottom)
+
+            if layout["y"] <= center_y <= layout["bottom"] and centered_page_idx is None:
+                centered_page_idx = p_idx
+
+            if is_visible:
+                if not layout["is_rendered"]:
+                    self._render_continuous_page(layout)
+            else:
+                # Page is far off screen: unload its heavy image to keep memory lean
+                if layout["is_rendered"]:
+                    self._unload_continuous_page(layout)
+
+        if centered_page_idx is not None and centered_page_idx != self.current_page_idx and not self.is_playing:
+            self.current_page_idx = centered_page_idx
+            self.sentences = self._get_page_sentences(centered_page_idx)
+            self.page_entry.delete(0, "end")
+            self.page_entry.insert(0, str(centered_page_idx + 1))
+            if self.current_doc_id:
+                state_manager.update_progress(self.current_doc_id, centered_page_idx, 0)
+
+    def _render_continuous_page(self, layout: Dict[str, Any]):
+        """Renders an individual page into the continuous view with subtle dropshadow border."""
+        if not self.doc:
+            return
+        p_idx = layout["page_idx"]
+        page = self.doc[p_idx]
+        mat = pymupdf.Matrix(self.zoom_scale, self.zoom_scale)
+        pix = page.get_pixmap(matrix=mat)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        layout["base_img"] = img
+        photo = ImageTk.PhotoImage(img)
+        layout["photo"] = photo
+
+        # Draw crisp sheet border and background
+        border_color = "#383848" if self.theme == "dark" else "#cbd5e1"
+        rect_id = self.pdf_canvas.create_rectangle(
+            layout["x"] - 1, layout["y"] - 1,
+            layout["x"] + pix.width + 1, layout["y"] + pix.height + 1,
+            fill="#ffffff" if self.theme == "light" else "#1e1e24",
+            outline=border_color, width=1
+        )
+        layout["canvas_rect_id"] = rect_id
+
+        img_id = self.pdf_canvas.create_image(
+            layout["x"], layout["y"], image=photo, anchor="nw"
+        )
+        layout["canvas_img_id"] = img_id
+        layout["is_rendered"] = True
+
+        # If active sentence is on this page and playing, re-apply highlight
+        if self.is_playing and self.current_page_idx == p_idx and 0 <= self.current_sentence_idx < len(self.sentences):
+            self.current_highlighted_word_idx = None
+            self._highlight_sentence(self.current_sentence_idx, self.current_word_idx)
+
+    def _unload_continuous_page(self, layout: Dict[str, Any]):
+        """Unloads an off-screen page image to prevent RAM ballooning on large PDFs."""
+        if layout.get("canvas_img_id"):
+            try: self.pdf_canvas.delete(layout["canvas_img_id"])
+            except Exception: pass
+            layout["canvas_img_id"] = None
+        if layout.get("canvas_rect_id"):
+            try: self.pdf_canvas.delete(layout["canvas_rect_id"])
+            except Exception: pass
+            layout["canvas_rect_id"] = None
+        layout["photo"] = None
+        layout["base_img"] = None
+        layout["is_rendered"] = False
+
+    def _scroll_to_page(self, page_idx: int):
+        """Smoothly scrolls the continuous view to the top of page_idx."""
+        if not self.continuous_page_layouts:
+            self._render_continuous_view()
+        if not self.continuous_page_layouts or page_idx < 0 or page_idx >= len(self.continuous_page_layouts):
+            return
+
+        layout = self.continuous_page_layouts[page_idx]
+        scroll_region = self.pdf_canvas.cget("scrollregion")
+        if not scroll_region:
+            return
+        sr = [float(x) for x in scroll_region.split()]
+        total_h = max(1.0, sr[3])
+        target_y = max(0.0, (layout["y"] - 16.0) / total_h)
+        self.pdf_canvas.yview_moveto(min(1.0, target_y))
+        self._update_continuous_viewport()
+        self.current_page_idx = page_idx
+        self.page_entry.delete(0, "end")
+        self.page_entry.insert(0, str(page_idx + 1))
 
     def _clear_sentence_highlight(self):
         """Clears all sentence and word highlight indicators from canvas or notepad, restoring the clean page."""
@@ -2346,12 +2603,23 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.pdf_canvas.delete("sentence_highlight")
         except Exception:
             pass
-        if self.base_page_img is not None and self.canvas_img_id is not None:
-            try:
-                self.current_photo = ImageTk.PhotoImage(self.base_page_img)
-                self.pdf_canvas.itemconfigure(self.canvas_img_id, image=self.current_photo)
-            except Exception:
-                pass
+
+        if self.view_mode == "continuous" and self.continuous_page_layouts:
+            if 0 <= self.current_page_idx < len(self.continuous_page_layouts):
+                layout = self.continuous_page_layouts[self.current_page_idx]
+                if layout.get("base_img") is not None and layout.get("canvas_img_id") is not None:
+                    try:
+                        layout["photo"] = ImageTk.PhotoImage(layout["base_img"])
+                        self.pdf_canvas.itemconfigure(layout["canvas_img_id"], image=layout["photo"])
+                    except Exception:
+                        pass
+        else:
+            if self.base_page_img is not None and self.canvas_img_id is not None:
+                try:
+                    self.current_photo = ImageTk.PhotoImage(self.base_page_img)
+                    self.pdf_canvas.itemconfigure(self.canvas_img_id, image=self.current_photo)
+                except Exception:
+                    pass
         self.current_highlighted_word_idx = None
 
     def _highlight_sentence(self, sentence_idx: int, word_idx: Optional[int] = None):
@@ -2364,7 +2632,21 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
         if not self.sentences or sentence_idx < 0 or sentence_idx >= len(self.sentences):
             return
-        if self.base_page_img is None or self.canvas_img_id is None:
+
+        layout = None
+        if self.view_mode == "continuous":
+            if not self.continuous_page_layouts or self.current_page_idx >= len(self.continuous_page_layouts):
+                return
+            layout = self.continuous_page_layouts[self.current_page_idx]
+            if not layout.get("is_rendered") or layout.get("base_img") is None or layout.get("canvas_img_id") is None:
+                self._render_continuous_page(layout)
+            base_img = layout.get("base_img")
+            canvas_img_id = layout.get("canvas_img_id")
+        else:
+            base_img = self.base_page_img
+            canvas_img_id = self.canvas_img_id
+
+        if base_img is None or canvas_img_id is None:
             return
 
         # Avoid redundant redraw if sentence and word haven't changed
@@ -2376,7 +2658,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         if not words:
             return
 
-        img_w, img_h = self.base_page_img.size
+        img_w, img_h = base_img.size
 
         # Group words by line (using block and line numbers)
         lines_map = {}
@@ -2429,7 +2711,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
             return
 
         try:
-            cropped_base = self.base_page_img.crop((s_x0, s_y0, s_x1, s_y1))
+            cropped_base = base_img.crop((s_x0, s_y0, s_x1, s_y1))
             mask = Image.new("RGB", (cropped_base.width, cropped_base.height), (255, 255, 255))
             draw = ImageDraw.Draw(mask)
 
@@ -2449,11 +2731,16 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 )
 
             highlighted_crop = ImageChops.multiply(cropped_base, mask)
-            full_img = self.base_page_img.copy()
+            full_img = base_img.copy()
             full_img.paste(highlighted_crop, (s_x0, s_y0))
 
-            self.current_photo = ImageTk.PhotoImage(full_img)
-            self.pdf_canvas.itemconfigure(self.canvas_img_id, image=self.current_photo)
+            photo = ImageTk.PhotoImage(full_img)
+            if self.view_mode == "continuous" and layout is not None:
+                layout["photo"] = photo
+                self.pdf_canvas.itemconfigure(canvas_img_id, image=photo)
+            else:
+                self.current_photo = photo
+                self.pdf_canvas.itemconfigure(self.canvas_img_id, image=photo)
             self.current_highlighted_word_idx = word_idx
         except Exception as err:
             print(f"[Highlight] Error: {err}")
@@ -2462,8 +2749,9 @@ class SpeakaloudDesktopApp(ctk.CTk):
         if sentence_idx != self.last_scrolled_sentence_idx:
             self.last_scrolled_sentence_idx = sentence_idx
             try:
-                min_cy0 = 20 + s_y0
-                max_cy1 = 20 + s_y1
+                page_y0 = layout["y"] if (self.view_mode == "continuous" and layout is not None) else 20.0
+                min_cy0 = page_y0 + s_y0
+                max_cy1 = page_y0 + s_y1
                 c_height = self.pdf_canvas.winfo_height()
                 if c_height > 100:
                     vis_top = self.pdf_canvas.canvasy(0)
@@ -2475,6 +2763,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
                             total_h = max(1.0, sr[3])
                             target_y = max(0.0, (min_cy0 - 50) / total_h)
                             self.pdf_canvas.yview_moveto(min(1.0, target_y))
+                            if self.view_mode == "continuous":
+                                self._update_continuous_viewport()
             except Exception:
                 pass
 
@@ -2561,31 +2851,40 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
     def _zoom_in(self):
         self.zoom_mode = "custom"
-        self.zoom_scale = min(3.0, self.zoom_scale + 0.15)
-        self._render_current_page()
+        self.zoom_scale = min(3.0, round(self.zoom_scale + 0.15, 2))
+        self._render_pdf_view()
 
     def _zoom_out(self):
         self.zoom_mode = "custom"
-        self.zoom_scale = max(0.5, self.zoom_scale - 0.15)
-        self._render_current_page()
+        self.zoom_scale = max(0.4, round(self.zoom_scale - 0.15, 2))
+        self._render_pdf_view()
 
     def _zoom_fit_width(self):
         self.zoom_mode = "fit-width"
-        self._render_current_page()
+        self._render_pdf_view()
 
     def _prev_page(self):
         if self.current_page_idx > 0:
-            self._load_page(self.current_page_idx - 1)
+            if self.view_mode == "continuous":
+                self._scroll_to_page(self.current_page_idx - 1)
+            else:
+                self._load_page(self.current_page_idx - 1)
 
     def _next_page(self):
         if self.current_page_idx < self.total_pages - 1:
-            self._load_page(self.current_page_idx + 1)
+            if self.view_mode == "continuous":
+                self._scroll_to_page(self.current_page_idx + 1)
+            else:
+                self._load_page(self.current_page_idx + 1)
 
     def _jump_page_event(self, event):
         try:
             target = int(self.page_entry.get().strip()) - 1
             if 0 <= target < self.total_pages:
-                self._load_page(target)
+                if self.view_mode == "continuous":
+                    self._scroll_to_page(target)
+                else:
+                    self._load_page(target)
             else:
                 self.page_entry.delete(0, "end")
                 self.page_entry.insert(0, str(self.current_page_idx + 1))
@@ -2593,17 +2892,67 @@ class SpeakaloudDesktopApp(ctk.CTk):
             pass
 
     def _on_mouse_wheel(self, event):
+        # Ctrl + MouseWheel for smooth browser-style zooming
+        if (event.state & 0x0004) or (event.state & 4):
+            if event.delta > 0:
+                self._zoom_in()
+            elif event.delta < 0:
+                self._zoom_out()
+            return "break"
         if event.delta:
             self.pdf_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            if self.view_mode == "continuous":
+                self._update_continuous_viewport()
+
+    def _on_ctrl_mouse_wheel(self, event):
+        if event.delta > 0:
+            self._zoom_in()
+        elif event.delta < 0:
+            self._zoom_out()
+        return "break"
+
+    def _on_shift_mouse_wheel(self, event):
+        if event.delta:
+            self.pdf_canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        return "break"
+
+    def _on_y_scroll(self, *args):
+        self.pdf_canvas.yview(*args)
+        if self.view_mode == "continuous":
+            self._update_continuous_viewport()
+
+    def _on_canvas_configure(self, event):
+        if self.app_mode == "pdf" and self.doc:
+            if self.zoom_mode == "fit-width":
+                self._render_pdf_view()
+            elif self.view_mode == "continuous":
+                self._update_continuous_viewport()
+
+    def _find_page_and_pdf_coords(self, cx: float, cy: float) -> Tuple[Optional[int], float, float]:
+        if self.view_mode == "continuous" and self.continuous_page_layouts:
+            for layout in self.continuous_page_layouts:
+                if layout["y"] <= cy <= layout["bottom"]:
+                    px = (cx - layout["x"]) / self.zoom_scale
+                    py = (cy - layout["y"]) / self.zoom_scale
+                    return layout["page_idx"], px, py
+            return None, 0.0, 0.0
+        else:
+            page_x = 20.0
+            if self.base_page_img:
+                canvas_width = max(600, self.pdf_canvas.winfo_width())
+                page_x = max(20.0, (canvas_width - self.base_page_img.width) / 2.0)
+            px = (cx - page_x) / self.zoom_scale
+            py = (cy - 20.0) / self.zoom_scale
+            return self.current_page_idx, px, py
 
     def _canvas_to_pdf_coords(self, cx: float, cy: float) -> Tuple[float, float]:
-        px = (cx - 20) / self.zoom_scale
-        py = (cy - 20) / self.zoom_scale
+        _, px, py = self._find_page_and_pdf_coords(cx, cy)
         return px, py
 
-    def _find_word_at_coords(self, px: float, py: float) -> Optional[Tuple[int, int, Dict[str, Any]]]:
-        for s in self.sentences:
-            for w in s["words"]:
+    def _find_word_at_coords(self, page_idx: int, px: float, py: float) -> Optional[Tuple[int, int, Dict[str, Any]]]:
+        sentences = self._get_page_sentences(page_idx)
+        for s in sentences:
+            for w in s.get("words", []):
                 x0, y0, x1, y1 = w["bbox"]
                 if x0 - 2 <= px <= x1 + 2 and y0 - 2 <= py <= y1 + 2:
                     return s["s_idx"], w["w_idx"], w
@@ -2613,19 +2962,30 @@ class SpeakaloudDesktopApp(ctk.CTk):
         """Shows hand cursor when hovering over clickable words without obscuring text."""
         canvas_x = self.pdf_canvas.canvasx(event.x)
         canvas_y = self.pdf_canvas.canvasy(event.y)
-        px, py = self._canvas_to_pdf_coords(canvas_x, canvas_y)
-        match = self._find_word_at_coords(px, py)
+        page_idx, px, py = self._find_page_and_pdf_coords(canvas_x, canvas_y)
+        match = None
+        if page_idx is not None:
+            match = self._find_word_at_coords(page_idx, px, py)
         self.pdf_canvas.config(cursor="hand2" if match else "")
 
     def _on_canvas_mouse_click(self, event):
         """Clicking any word immediately plays from that word WITHOUT jumping the viewport."""
         canvas_x = self.pdf_canvas.canvasx(event.x)
         canvas_y = self.pdf_canvas.canvasy(event.y)
-        px, py = self._canvas_to_pdf_coords(canvas_x, canvas_y)
+        page_idx, px, py = self._find_page_and_pdf_coords(canvas_x, canvas_y)
+        if page_idx is None:
+            return
 
-        match = self._find_word_at_coords(px, py)
+        match = self._find_word_at_coords(page_idx, px, py)
         if match:
             s_idx, w_idx, word = match
+            if page_idx != self.current_page_idx:
+                self.current_page_idx = page_idx
+                self.sentences = self._get_page_sentences(page_idx)
+                self.page_entry.delete(0, "end")
+                self.page_entry.insert(0, str(page_idx + 1))
+                if self.current_doc_id:
+                    state_manager.update_progress(self.current_doc_id, page_idx, 0)
             self.play_sentence(s_idx, w_idx)
 
     def _toggle_playback(self):
@@ -2651,17 +3011,42 @@ class SpeakaloudDesktopApp(ctk.CTk):
         if self.current_sentence_idx > 0:
             self.play_sentence(self.current_sentence_idx - 1, 0)
         elif self.app_mode == "pdf" and self.current_page_idx > 0:
-            self._load_page(self.current_page_idx - 1)
-            last_idx = max(0, len(self.sentences) - 1)
-            self.after(150, lambda: self.play_sentence(last_idx, 0))
+            prev_page = self.current_page_idx - 1
+            if self.view_mode == "continuous":
+                self.current_page_idx = prev_page
+                self.sentences = self._get_page_sentences(prev_page)
+                self.page_entry.delete(0, "end")
+                self.page_entry.insert(0, str(prev_page + 1))
+                if self.current_doc_id:
+                    state_manager.update_progress(self.current_doc_id, prev_page, 0)
+                self._update_continuous_viewport()
+                self._scroll_to_page(prev_page)
+                last_idx = max(0, len(self.sentences) - 1)
+                self.after(150, lambda: self.play_sentence(last_idx, 0))
+            else:
+                self._load_page(prev_page)
+                last_idx = max(0, len(self.sentences) - 1)
+                self.after(150, lambda: self.play_sentence(last_idx, 0))
 
     def _next_sentence(self):
         self._stop_audio()
         if self.current_sentence_idx < len(self.sentences) - 1:
             self.play_sentence(self.current_sentence_idx + 1, 0)
         elif self.app_mode == "pdf" and self.current_page_idx < self.total_pages - 1:
-            self._load_page(self.current_page_idx + 1)
-            self.after(150, lambda: self.play_sentence(0, 0))
+            next_page = self.current_page_idx + 1
+            if self.view_mode == "continuous":
+                self.current_page_idx = next_page
+                self.sentences = self._get_page_sentences(next_page)
+                self.page_entry.delete(0, "end")
+                self.page_entry.insert(0, str(next_page + 1))
+                if self.current_doc_id:
+                    state_manager.update_progress(self.current_doc_id, next_page, 0)
+                self._update_continuous_viewport()
+                self._scroll_to_page(next_page)
+                self.after(150, lambda: self.play_sentence(0, 0))
+            else:
+                self._load_page(next_page)
+                self.after(150, lambda: self.play_sentence(0, 0))
         else:
             self.btn_play_pause.configure(text="▶ Play", fg_color="#2563eb")
             self._set_status("End of text reached.")
@@ -2895,8 +3280,20 @@ class SpeakaloudDesktopApp(ctk.CTk):
         if self.current_sentence_idx < len(self.sentences) - 1:
             self.play_sentence(self.current_sentence_idx + 1, 0)
         elif self.app_mode == "pdf" and self.current_page_idx < self.total_pages - 1:
-            self._load_page(self.current_page_idx + 1)
-            self.after(100, lambda: self.play_sentence(0, 0))
+            next_page = self.current_page_idx + 1
+            if self.view_mode == "continuous":
+                self.current_page_idx = next_page
+                self.sentences = self._get_page_sentences(next_page)
+                self.page_entry.delete(0, "end")
+                self.page_entry.insert(0, str(next_page + 1))
+                if self.current_doc_id:
+                    state_manager.update_progress(self.current_doc_id, next_page, 0)
+                self._update_continuous_viewport()
+                self._scroll_to_page(next_page)
+                self.after(100, lambda: self.play_sentence(0, 0))
+            else:
+                self._load_page(next_page)
+                self.after(100, lambda: self.play_sentence(0, 0))
         else:
             self.btn_play_pause.configure(text="▶ Play", fg_color="#2563eb")
             self._set_status("Finished reading.")
