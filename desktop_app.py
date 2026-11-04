@@ -3298,7 +3298,14 @@ class SpeakaloudDesktopApp(ctk.CTk):
                     wb_idx = min(len(self.word_boundaries) - 1, int(ratio * len(self.word_boundaries)))
                     seek_ms = self.word_boundaries[wb_idx].get("offset_ms", 0.0)
 
-            start_sample = int((seek_ms / 1000.0) * sr)
+            if seek_ms > 0:
+                # Provide a small 60ms acoustic lead-in before the target word so DAC ramp-up doesn't clip the word
+                lead_in_samples = int(sr * 0.06)
+                start_sample = max(0, int((seek_ms / 1000.0) * sr) - lead_in_samples)
+                seek_ms = (start_sample / float(sr)) * 1000.0
+            else:
+                start_sample = 0
+
             if start_sample < total_samples:
                 play_data = data[start_sample:]
             else:
@@ -3345,7 +3352,18 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 play_dur_sec = len(self.audio_data) / float(self.audio_sr)
                 elapsed_sec = time.time() - self.start_playback_time
 
-                if elapsed_sec >= (play_dur_sec + 0.06):
+                # Check if audio output stream has finished playing all hardware buffered frames
+                stream_ended = False
+                try:
+                    stream = sd.get_stream()
+                    if stream is not None and not stream.active and elapsed_sec >= (play_dur_sec * 0.75):
+                        stream_ended = True
+                except Exception:
+                    pass
+
+                # Guard against premature cutoff: wait for stream completion or fallback timeout
+                # (allowing for OS audio driver output latency of ~180-350ms)
+                if stream_ended or elapsed_sec >= (play_dur_sec + 0.35):
                     self._on_playback_ended()
                 else:
                     cur_time_ms = self.seek_offset_ms + (elapsed_sec * 1000.0)
