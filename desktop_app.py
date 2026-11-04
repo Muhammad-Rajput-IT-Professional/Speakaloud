@@ -2080,22 +2080,21 @@ class SpeakaloudDesktopApp(ctk.CTk):
             top_row = ctk.CTkFrame(card, fg_color="transparent")
             top_row.pack(fill="x", padx=6, pady=(4, 0))
 
-            t_lbl = ctk.CTkLabel(top_row, text=doc.get("title", "Document"), font=("Segoe UI", 11, "bold"), anchor="w")
-            t_lbl.pack(side="left", fill="x", expand=True)
-
+            # Pack delete button on the right FIRST so long titles never push it off screen
             btn_del = ctk.CTkButton(
-                top_row, text="✕", width=22, height=20, font=("Segoe UI", 10),
+                top_row, text="✕", width=22, height=20, font=("Segoe UI", 11, "bold"),
                 fg_color="transparent", hover_color=("#fee2e2", "#7f1d1d"), text_color=("gray40", "gray70"),
                 command=lambda d_id=doc["doc_id"]: self._remove_from_library(d_id)
             )
-            btn_del.pack(side="right")
+            btn_del.pack(side="right", padx=(4, 0))
+
+            t_lbl = ctk.CTkLabel(top_row, text=doc.get("title", "Document"), font=("Segoe UI", 11, "bold"), anchor="w")
+            t_lbl.pack(side="left", fill="x", expand=True)
 
             bot_row = ctk.CTkFrame(card, fg_color="transparent")
             bot_row.pack(fill="x", padx=6, pady=(2, 6))
 
-            p_lbl = ctk.CTkLabel(bot_row, text=f"Page {doc.get('current_page', 0) + 1}/{doc.get('total_pages', 1)} ({int(doc.get('progress_percent', 0))}%)", font=("Segoe UI", 10), text_color="gray60", anchor="w")
-            p_lbl.pack(side="left")
-
+            # Pack action buttons on the right first
             btn_read = ctk.CTkButton(
                 bot_row, text="Read", width=52, height=22, font=("Segoe UI", 11),
                 command=lambda p=doc["file_path"], pg=doc.get("current_page", 0): self._open_pdf_path(p, pg)
@@ -2108,6 +2107,9 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 command=lambda d_id=doc["doc_id"], p=doc["file_path"]: self._reset_doc_progress(d_id, p)
             )
             btn_reset.pack(side="right", padx=2)
+
+            p_lbl = ctk.CTkLabel(bot_row, text=f"Page {doc.get('current_page', 0) + 1}/{doc.get('total_pages', 1)} ({int(doc.get('progress_percent', 0))}%)", font=("Segoe UI", 10), text_color="gray60", anchor="w")
+            p_lbl.pack(side="left", fill="x", expand=True)
 
     def _remove_from_library(self, doc_id: str):
         state_manager.remove_document(doc_id)
