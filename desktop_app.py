@@ -42,7 +42,7 @@ from app.config import (
     APP_DATA_DIR, DATA_DIR, CACHE_DIR, UPLOADS_DIR, NOTEPAD_DRAFT_FILE, MODELS_DIR
 )
 from app.tts_engine import synthesize_text, get_all_voices
-from app.local_tts import synthesize_kokoro, is_kokoro_downloaded, get_kokoro_instance, KOKORO_VOICES
+from app.local_tts import synthesize_kokoro, is_kokoro_downloaded, get_kokoro_instance, KOKORO_VOICES, synthesize_piper, is_piper_voice_downloaded, get_piper_instance, PIPER_VOICES
 from app.speech_rules import rule_engine
 from app.state_manager import state_manager
 
@@ -96,6 +96,17 @@ def _preload_voices_background():
                 "installed": kokoro_installed
             })
 
+        for pv in PIPER_VOICES:
+            voices.append({
+                "engine": "piper",
+                "voice_key": pv["voice_key"],
+                "name": pv["name"],
+                "gender": pv.get("gender", "Unknown"),
+                "locale": "en-US" if pv.get("accent") == "American" else "en-GB",
+                "desc": pv.get("sample_desc", "Piper Ultra-Fast Voice"),
+                "installed": is_piper_voice_downloaded(pv["voice_key"])
+            })
+
         for ev in raw_edge:
             voices.append({
                 "engine": "cloud",
@@ -124,6 +135,13 @@ def _resolve_voice_name(voice_key: str, engine: str = "cloud") -> str:
                 clean_name = kv.get("name", "").replace("Kokoro - ", "")
                 return f"{clean_name} ({kv.get('gender')})"
         return f"Kokoro ({voice_key})"
+
+    if engine == "piper":
+        for pv in PIPER_VOICES:
+            if pv.get("voice_key") == voice_key:
+                clean_name = pv.get("name", "").replace("Piper - ", "")
+                return f"Piper {clean_name} ({pv.get('gender')})"
+        return f"Piper ({voice_key})"
 
     # Check global cache or voices.json
     cache_file = CACHE_DIR / "voices.json"
@@ -217,7 +235,7 @@ class VoiceManagerDialog(ctk.CTkToplevel):
 
         # Engine filter
         self.filter_engine = ctk.CTkSegmentedButton(
-            filter_row, values=["All Engines", "Edge Cloud", "Kokoro Local"],
+            filter_row, values=["All Engines", "Edge Cloud", "Piper Local", "Kokoro Local"],
             command=lambda v: self._apply_filter()
         )
         self.filter_engine.set("All Engines")
@@ -286,7 +304,9 @@ class VoiceManagerDialog(ctk.CTkToplevel):
             cache_mb, cache_count = self._calc_cache_stats()
             models_mb, kokoro_installed = self._calc_models_stats()
 
-            models_str = f"Kokoro AI: {models_mb:.1f} MB" if kokoro_installed else "Kokoro AI: 0 MB"
+            piper_count = sum(1 for pv in PIPER_VOICES if is_piper_voice_downloaded(pv["voice_key"]))
+            piper_str = f"Piper: {piper_count}/{len(PIPER_VOICES)} Installed"
+            models_str = (f"Kokoro AI: {models_mb:.0f} MB" if kokoro_installed else "Kokoro: None") + f"  |  {piper_str}"
             self.lbl_storage_info.configure(
                 text=f"💾 Cache: {cache_mb:.1f} MB ({cache_count} files)  |  {models_str}"
             )
@@ -441,6 +461,8 @@ class VoiceManagerDialog(ctk.CTkToplevel):
         for v in self.all_voices:
             if engine_filter == "Edge Cloud" and v["engine"] != "cloud":
                 continue
+            if engine_filter == "Piper Local" and v["engine"] != "piper":
+                continue
             if engine_filter == "Kokoro Local" and v["engine"] != "kokoro":
                 continue
 
@@ -485,8 +507,8 @@ class VoiceManagerDialog(ctk.CTkToplevel):
             card.pack(fill="x", pady=2, padx=2)
             card.grid_columnconfigure(0, weight=1)
 
-            tag = "[Kokoro ONNX]" if v["engine"] == "kokoro" else "[Edge Cloud]"
-            color = "#f59e0b" if v["engine"] == "kokoro" else "#3b82f6"
+            tag = "[Kokoro ONNX]" if v["engine"] == "kokoro" else ("[Piper Local]" if v["engine"] == "piper" else "[Edge Cloud]")
+            color = "#f59e0b" if v["engine"] == "kokoro" else ("#10b981" if v["engine"] == "piper" else "#3b82f6")
 
             name_lbl = ctk.CTkLabel(
                 card, text=f"{v['name']} ", font=("Segoe UI", 12, "bold"), anchor="w"
@@ -541,6 +563,17 @@ class VoiceManagerDialog(ctk.CTkToplevel):
                 self._start_kokoro_download()
             return
 
+        if voice_item["engine"] == "piper" and not is_piper_voice_downloaded(voice_item["voice_key"]):
+            ans = messagebox.askyesno(
+                "Download Piper Voice",
+                f"Piper voice '{voice_item['name']}' (~63 MB) is not yet downloaded on this PC.\n\n"
+                "Would you like to download it now for ultra-fast, lightweight offline speech?",
+                parent=self
+            )
+            if ans:
+                self._start_piper_download(voice_item["voice_key"])
+            return
+
         orig_text = "▶ Sample"
         if btn_widget and btn_widget.winfo_exists():
             orig_text = btn_widget.cget("text")
@@ -548,12 +581,14 @@ class VoiceManagerDialog(ctk.CTkToplevel):
 
         def worker():
             try:
-                clean_name = voice_item['name'].replace("Kokoro - ", "").split()[0]
+                clean_name = voice_item['name'].replace("Kokoro - ", "").replace("Piper - ", "").split()[0]
                 text = f"Hello! This is {clean_name} reading with Speakaloud."
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 if voice_item["engine"] == "kokoro":
                     res = loop.run_until_complete(synthesize_kokoro(text, voice_key=voice_item["voice_key"], speed=1.0))
+                elif voice_item["engine"] == "piper":
+                    res = loop.run_until_complete(synthesize_piper(text, voice_key=voice_item["voice_key"], speed=1.0))
                 else:
                     res = loop.run_until_complete(synthesize_text(text, voice=voice_item["voice_key"], rate="+0%"))
                 loop.close()
@@ -587,8 +622,57 @@ class VoiceManagerDialog(ctk.CTkToplevel):
                 self._start_kokoro_download()
             return
 
+        if voice_item["engine"] == "piper" and not is_piper_voice_downloaded(voice_item["voice_key"]):
+            ans = messagebox.askyesno(
+                "Download Piper Voice",
+                f"You selected '{voice_item['name']}'.\n\n"
+                "This lightweight neural voice model (~63 MB) will be downloaded once to run 100% offline.\n\n"
+                "Download now?",
+                parent=self
+            )
+            if ans:
+                self._start_piper_download(voice_item["voice_key"])
+            return
+
         self.on_select_voice(voice_item)
         self.destroy()
+
+    def _start_piper_download(self, voice_key: str):
+        from app.local_tts import start_download_task, _DOWNLOAD_PROGRESS
+        start_download_task("piper", voice_key=voice_key)
+        self.btn_delete_models.configure(text=f"⏳ Downloading {voice_key}...", state="disabled")
+
+        def _poll():
+            if not self.winfo_exists():
+                return
+            prog = _DOWNLOAD_PROGRESS.get(voice_key, {})
+            status = prog.get("status", "downloading")
+            pct = prog.get("percent", 0.0)
+
+            if status == "downloading":
+                self.btn_delete_models.configure(text=f"⏳ Downloading Piper ({pct:.0f}%)...")
+                self.lbl_storage_info.configure(text=f"📥 Downloading Piper Voice ({voice_key}): {pct:.1f}%")
+                self.after(250, _poll)
+            elif status == "ready":
+                self._refresh_storage_ui()
+                for item in self.all_voices:
+                    if item.get("engine") == "piper" and item.get("voice_key") == voice_key:
+                        item["installed"] = True
+                self._apply_filter()
+                messagebox.showinfo(
+                    "Piper Voice Ready",
+                    f"Piper voice model '{voice_key}' downloaded successfully! Ready to use offline.",
+                    parent=self
+                )
+            elif status == "error":
+                self._refresh_storage_ui()
+                messagebox.showerror(
+                    "Download Error",
+                    f"Could not download Piper voice:\n{prog.get('error', 'Network error')}",
+                    parent=self
+                )
+
+        self.after(250, _poll)
 
 
 class RuleEditorDialog(ctk.CTkToplevel):
@@ -841,6 +925,8 @@ class SpeechRulesDialog(ctk.CTkToplevel):
                 asyncio.set_event_loop(loop)
                 if engine == "kokoro":
                     res = loop.run_until_complete(synthesize_kokoro(transformed, voice_key=voice_key, speed=speed))
+                elif engine == "piper":
+                    res = loop.run_until_complete(synthesize_piper(transformed, voice_key=voice_key, speed=speed))
                 else:
                     pct = int((speed - 1.0) * 100)
                     rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
@@ -1023,6 +1109,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
         # Pre-warm Kokoro neural session in background if active
         if self.active_engine == "kokoro" and is_kokoro_downloaded():
             threading.Thread(target=get_kokoro_instance, daemon=True).start()
+        elif self.active_engine == "piper" and is_piper_voice_downloaded(self.active_voice_key):
+            threading.Thread(target=lambda: get_piper_instance(self.active_voice_key), daemon=True).start()
 
         # Playback State & Thread Safety
         self.is_playing: bool = False
@@ -2090,6 +2178,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
         if self.active_engine == "kokoro" and is_kokoro_downloaded():
             threading.Thread(target=get_kokoro_instance, daemon=True).start()
+        elif self.active_engine == "piper" and is_piper_voice_downloaded(self.active_voice_key):
+            threading.Thread(target=lambda: get_piper_instance(self.active_voice_key), daemon=True).start()
 
         if self.is_playing:
             self.play_sentence(self.current_sentence_idx, self.current_word_idx)
@@ -3182,6 +3272,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
                             asyncio.set_event_loop(loop)
                             if self.active_engine == "kokoro":
                                 res = loop.run_until_complete(synthesize_kokoro(text, voice_key=self.active_voice_key, speed=speed))
+                            elif self.active_engine == "piper":
+                                res = loop.run_until_complete(synthesize_piper(text, voice_key=self.active_voice_key, speed=speed))
                             else:
                                 pct = int((speed - 1.0) * 100)
                                 rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
@@ -3253,6 +3345,20 @@ class SpeakaloudDesktopApp(ctk.CTk):
                             pct = int((speed - 1.0) * 100)
                             rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
                             is_male = voice_key.startswith(("am_", "bm_", "em_", "hm_", "im_", "jm_", "pm_", "zm_"))
+                            fallback_voice = "en-US-GuyNeural" if is_male else "en-US-JennyNeural"
+                            tts_data = loop.run_until_complete(
+                                synthesize_text(text, voice=fallback_voice, rate=rate_str)
+                            )
+                    elif engine == "piper":
+                        try:
+                            tts_data = loop.run_until_complete(
+                                synthesize_piper(text, voice_key=voice_key, speed=speed)
+                            )
+                        except Exception as p_err:
+                            print(f"[Piper] Synthesis error: {p_err}, falling back to Edge TTS")
+                            pct = int((speed - 1.0) * 100)
+                            rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
+                            is_male = any(m in voice_key.lower() for m in ["ryan", "alan", "danny"])
                             fallback_voice = "en-US-GuyNeural" if is_male else "en-US-JennyNeural"
                             tts_data = loop.run_until_complete(
                                 synthesize_text(text, voice=fallback_voice, rate=rate_str)

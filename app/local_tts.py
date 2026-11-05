@@ -48,24 +48,54 @@ PIPER_VOICES = [
         "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json"
     },
     {
-        "id": "piper_en_US_amy_medium",
-        "voice_key": "en_US-amy-medium",
-        "name": "Piper - Amy",
-        "gender": "Female",
-        "accent": "American",
-        "sample_desc": "Natural conversational American female (60MB)",
-        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
-        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json"
-    },
-    {
         "id": "piper_en_US_ryan_medium",
         "voice_key": "en_US-ryan-medium",
         "name": "Piper - Ryan",
         "gender": "Male",
         "accent": "American",
-        "sample_desc": "Crisp American male narrator (60MB)",
+        "sample_desc": "Crisp American male narrator (63MB)",
         "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx",
         "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json"
+    },
+    {
+        "id": "piper_en_US_amy_medium",
+        "voice_key": "en_US-amy-medium",
+        "name": "Piper - Amy",
+        "gender": "Female",
+        "accent": "American",
+        "sample_desc": "Natural conversational American female (63MB)",
+        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
+        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json"
+    },
+    {
+        "id": "piper_en_US_danny_low",
+        "voice_key": "en_US-danny-low",
+        "name": "Piper - Danny",
+        "gender": "Male",
+        "accent": "American",
+        "sample_desc": "Ultra-lightweight fast male voice (63MB)",
+        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/danny/low/en_US-danny-low.onnx",
+        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/danny/low/en_US-danny-low.onnx.json"
+    },
+    {
+        "id": "piper_en_GB_alan_medium",
+        "voice_key": "en_GB-alan-medium",
+        "name": "Piper - Alan",
+        "gender": "Male",
+        "accent": "British",
+        "sample_desc": "Articulate British male narrator (63MB)",
+        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx",
+        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json"
+    },
+    {
+        "id": "piper_en_GB_alba_medium",
+        "voice_key": "en_GB-alba-medium",
+        "name": "Piper - Alba",
+        "gender": "Female",
+        "accent": "British",
+        "sample_desc": "Pleasant British female narrator (63MB)",
+        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx",
+        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json"
     }
 ]
 
@@ -74,6 +104,27 @@ _DOWNLOAD_PROGRESS: Dict[str, Dict[str, Any]] = {}
 _KOKORO_INSTANCE = None
 _KOKORO_LOCK = threading.Lock()
 _PIPER_INSTANCES: Dict[str, Any] = {}
+_PIPER_LOCK = threading.Lock()
+_PIPER_PHONEMIZER = None
+
+
+def get_piper_phonemizer():
+    global _PIPER_PHONEMIZER
+    with _PIPER_LOCK:
+        if _PIPER_PHONEMIZER is not None:
+            return _PIPER_PHONEMIZER
+        try:
+            import espeakng_loader
+            from phonemizer.backend.espeak import wrapper
+            from phonemizer.backend import EspeakBackend
+            os.environ["ESPEAK_DATA_PATH"] = str(espeakng_loader.get_data_path())
+            wrapper.EspeakWrapper.set_library(espeakng_loader.get_library_path())
+            wrapper.EspeakWrapper.set_data_path(str(espeakng_loader.get_data_path()))
+            _PIPER_PHONEMIZER = EspeakBackend("en-us")
+            return _PIPER_PHONEMIZER
+        except Exception as e:
+            print(f"[LocalTTS] Could not initialize espeak for Piper: {e}")
+            return None
 
 
 def is_kokoro_downloaded() -> bool:
@@ -243,22 +294,23 @@ def get_kokoro_instance():
 
 def get_piper_instance(voice_key: str):
     global _PIPER_INSTANCES
-    if voice_key in _PIPER_INSTANCES:
-        return _PIPER_INSTANCES[voice_key]
+    with _PIPER_LOCK:
+        if voice_key in _PIPER_INSTANCES:
+            return _PIPER_INSTANCES[voice_key]
 
-    if not is_piper_voice_downloaded(voice_key):
-        return None
+        if not is_piper_voice_downloaded(voice_key):
+            return None
 
-    try:
-        from piper import PiperVoice
-        onnx_path = str(PIPER_DIR / f"{voice_key}.onnx")
-        json_path = str(PIPER_DIR / f"{voice_key}.onnx.json")
-        voice = PiperVoice.load(onnx_path, config_path=json_path)
-        _PIPER_INSTANCES[voice_key] = voice
-        return voice
-    except Exception as e:
-        print(f"[LocalTTS] Could not initialize Piper voice {voice_key}: {e}")
-        return None
+        try:
+            from piper.voice import PiperVoice
+            onnx_path = str(PIPER_DIR / f"{voice_key}.onnx")
+            json_path = str(PIPER_DIR / f"{voice_key}.onnx.json")
+            voice = PiperVoice.load(onnx_path, config_path=json_path)
+            _PIPER_INSTANCES[voice_key] = voice
+            return voice
+        except Exception as e:
+            print(f"[LocalTTS] Could not initialize Piper voice {voice_key}: {e}")
+            return None
 
 
 def estimate_word_boundaries(
@@ -417,14 +469,18 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
 
 
 async def synthesize_piper(text: str, voice_key: str = "en_US-lessac-medium", speed: float = 1.0) -> Dict[str, Any]:
-    """Synthesize speech using Piper TTS ONNX model."""
+    """Synthesize speech using Piper TTS ONNX model with ultra-fast CPU inference."""
     piper_voice = get_piper_instance(voice_key)
     if piper_voice is None:
         raise RuntimeError(f"Piper voice '{voice_key}' model is not downloaded yet.")
 
+    phonemizer = get_piper_phonemizer()
+    if phonemizer is None:
+        raise RuntimeError("Espeak phonemizer is not available for Piper.")
+
     speech_text, rules = rule_engine.apply_rules(text)
     if not speech_text.strip():
-        return {"audio_url": None, "word_boundaries": [], "is_empty": True}
+        return {"audio_url": None, "word_boundaries": [], "speech_text": "", "is_empty": True}
 
     cache_hash = hashlib.sha256(f"piper_v3|{speech_text}|{voice_key}|{speed}".encode()).hexdigest()[:20]
     out_file = CACHE_DIR / f"{cache_hash}.wav"
@@ -442,23 +498,33 @@ async def synthesize_piper(text: str, voice_key: str = "en_US-lessac-medium", sp
         }
 
     loop = asyncio.get_event_loop()
-    import wave
-    
+
     def generate_piper():
         import soundfile as sf
-        raw_tmp = CACHE_DIR / f"{cache_hash}_raw.wav"
-        with wave.open(str(raw_tmp), "wb") as wav_file:
-            piper_voice.synthesize(speech_text, wav_file)
-        data, sr = sf.read(str(raw_tmp), dtype="float32")
-        try:
-            raw_tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
+        import unicodedata
+        from piper.config import SynthesisConfig
+
+        raw_phones = phonemizer.phonemize([speech_text])[0]
+        phones_nfd = list(unicodedata.normalize("NFD", raw_phones))
+        phoneme_ids = piper_voice.phonemes_to_ids(phones_nfd)
+
+        l_scale = round(1.0 / max(0.5, min(2.0, speed)), 2)
+        syn_config = SynthesisConfig(length_scale=l_scale)
+
+        audio = piper_voice.phoneme_ids_to_audio(phoneme_ids, syn_config=syn_config)
+        sr = piper_voice.config.sample_rate
+
+        max_val = np.max(np.abs(audio))
+        if max_val > 1e-6:
+            audio = audio / max_val
+        audio = np.clip(audio, -1.0, 1.0).astype(np.float32)
+
         lead = np.zeros(int(sr * 0.30), dtype=np.float32)
         trail = np.zeros(int(sr * 0.25), dtype=np.float32)
-        padded = np.concatenate([lead, data, trail])
-        sf.write(str(out_file), padded, sr, format="WAV")
-        return len(padded) / float(sr)
+        final_audio = np.concatenate([lead, audio, trail])
+
+        sf.write(str(out_file), final_audio, sr, format="WAV")
+        return len(final_audio) / float(sr)
 
     duration_sec = await loop.run_in_executor(None, generate_piper)
     boundaries = estimate_word_boundaries(speech_text, duration_sec, lead_in_ms=300.0, trail_ms=250.0)

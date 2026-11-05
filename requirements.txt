@@ -6,3 +6,6 @@ soundfile>=0.12.1
 numpy>=1.26.0
 edge-tts>=6.1.10
 kokoro-onnx>=0.3.0
+piper-tts>=1.2.0
+espeakng-loader>=0.2.0
+phonemizer-fork>=3.3.0
