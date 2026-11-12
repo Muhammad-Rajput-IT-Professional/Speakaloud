@@ -1431,7 +1431,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.speed_label.pack(side="top")
 
         self.speed_slider = ctk.CTkSlider(
-            self.speed_frame, from_=0.5, to=2.0, width=95, number_of_steps=15,
+            self.speed_frame, from_=0.5, to=3.0, width=110, number_of_steps=25,
             command=self._on_speed_change
         )
         self.speed_slider.set(1.0)
@@ -2185,8 +2185,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.play_sentence(self.current_sentence_idx, self.current_word_idx)
 
     def _on_speed_change(self, val):
-        rounded = round(float(val), 2)
-        self.speed_label.configure(text=f"Speed: {rounded}x")
+        rounded = round(float(val), 1)
+        self.speed_label.configure(text=f"Speed: {rounded:.1f}x")
         self.prefetch_cache.clear()
 
         if self.is_playing and not self.is_synthesizing:

@@ -434,7 +434,7 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
 
         for i, c in enumerate(chunks):
             with _KOKORO_LOCK:
-                s, sr = kokoro.create(c, voice=voice_key, speed=speed, lang="en-us")
+                s, sr = kokoro.create(c, voice=voice_key, speed=max(0.5, min(2.0, speed)), lang="en-us")
             all_samples.append(s)
             if i < len(chunks) - 1:
                 silence = np.zeros(int(sr * 0.08), dtype=np.float32)
@@ -508,7 +508,7 @@ async def synthesize_piper(text: str, voice_key: str = "en_US-lessac-medium", sp
         phones_nfd = list(unicodedata.normalize("NFD", raw_phones))
         phoneme_ids = piper_voice.phonemes_to_ids(phones_nfd)
 
-        l_scale = round(1.0 / max(0.5, min(2.0, speed)), 2)
+        l_scale = round(1.0 / max(0.5, min(3.0, speed)), 2)
         syn_config = SynthesisConfig(length_scale=l_scale)
 
         audio = piper_voice.phoneme_ids_to_audio(phoneme_ids, syn_config=syn_config)
