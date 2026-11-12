@@ -429,24 +429,32 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
         all_samples = []
         sr = 24000
         # Prepend 140ms lead-in silence so audio hardware DAC spools up cleanly without clipping word 1
-        lead_silence = np.zeros(int(sr * 0.30), dtype=np.float32)
+        eff_speed = max(1.0, speed)
+        lead_silence = np.zeros(int(sr * (0.30 / eff_speed)), dtype=np.float32)
         all_samples.append(lead_silence)
+
+        post_factor = round(speed / 2.0, 3) if speed > 2.0 else 1.0
+        k_speed = 2.0 if speed > 2.0 else max(0.5, speed)
 
         for i, c in enumerate(chunks):
             with _KOKORO_LOCK:
-                s, sr = kokoro.create(c, voice=voice_key, speed=max(0.5, min(2.0, speed)), lang="en-us")
+                s, sr = kokoro.create(c, voice=voice_key, speed=k_speed, lang="en-us")
             all_samples.append(s)
             if i < len(chunks) - 1:
                 silence = np.zeros(int(sr * 0.08), dtype=np.float32)
                 all_samples.append(silence)
 
-        # Append 220ms trailing silence so final words are never chopped by playback end/transitions
-        trail_silence = np.zeros(int(sr * 0.25), dtype=np.float32)
+        trail_silence = np.zeros(int(sr * (0.25 / eff_speed)), dtype=np.float32)
         all_samples.append(trail_silence)
 
         if not all_samples:
             return np.zeros(int(sr * 0.5), dtype=np.float32), sr
-        return np.concatenate(all_samples), sr
+
+        concatenated = np.concatenate(all_samples)
+        if post_factor > 1.0:
+            from app.audio_dsp import time_stretch_sola
+            concatenated = time_stretch_sola(concatenated, post_factor, sr)
+        return concatenated, sr
 
     samples, sample_rate = await loop.run_in_executor(None, generate_kokoro)
 
@@ -454,7 +462,8 @@ async def synthesize_kokoro(text: str, voice_key: str = "af_bella", speed: float
     sf.write(str(out_wav), samples, sample_rate, format="WAV")
 
     duration_sec = len(samples) / float(sample_rate)
-    boundaries = estimate_word_boundaries(speech_text, duration_sec, lead_in_ms=300.0, trail_ms=250.0)
+    eff_spd = max(1.0, speed)
+    boundaries = estimate_word_boundaries(speech_text, duration_sec, lead_in_ms=300.0 / eff_spd, trail_ms=250.0 / eff_spd)
 
     with open(meta_json, "w", encoding="utf-8") as f:
         json.dump({"word_boundaries": boundaries, "duration_sec": duration_sec}, f, indent=2)
@@ -508,7 +517,9 @@ async def synthesize_piper(text: str, voice_key: str = "en_US-lessac-medium", sp
         phones_nfd = list(unicodedata.normalize("NFD", raw_phones))
         phoneme_ids = piper_voice.phonemes_to_ids(phones_nfd)
 
-        l_scale = round(1.0 / max(0.5, min(3.0, speed)), 2)
+        post_factor = round(speed / 2.0, 3) if speed > 2.0 else 1.0
+        piper_speed = 2.0 if speed > 2.0 else max(0.5, speed)
+        l_scale = round(1.0 / piper_speed, 2)
         syn_config = SynthesisConfig(length_scale=l_scale)
 
         audio = piper_voice.phoneme_ids_to_audio(phoneme_ids, syn_config=syn_config)
@@ -519,15 +530,21 @@ async def synthesize_piper(text: str, voice_key: str = "en_US-lessac-medium", sp
             audio = audio / max_val
         audio = np.clip(audio, -1.0, 1.0).astype(np.float32)
 
-        lead = np.zeros(int(sr * 0.30), dtype=np.float32)
-        trail = np.zeros(int(sr * 0.25), dtype=np.float32)
+        if post_factor > 1.0:
+            from app.audio_dsp import time_stretch_sola
+            audio = time_stretch_sola(audio, post_factor, sr)
+
+        eff_speed = max(1.0, speed)
+        lead = np.zeros(int(sr * (0.30 / eff_speed)), dtype=np.float32)
+        trail = np.zeros(int(sr * (0.25 / eff_speed)), dtype=np.float32)
         final_audio = np.concatenate([lead, audio, trail])
 
         sf.write(str(out_file), final_audio, sr, format="WAV")
         return len(final_audio) / float(sr)
 
     duration_sec = await loop.run_in_executor(None, generate_piper)
-    boundaries = estimate_word_boundaries(speech_text, duration_sec, lead_in_ms=300.0, trail_ms=250.0)
+    eff_spd = max(1.0, speed)
+    boundaries = estimate_word_boundaries(speech_text, duration_sec, lead_in_ms=300.0 / eff_spd, trail_ms=250.0 / eff_spd)
 
     with open(meta_json, "w", encoding="utf-8") as f:
         json.dump({"word_boundaries": boundaries, "duration_sec": duration_sec}, f, indent=2)

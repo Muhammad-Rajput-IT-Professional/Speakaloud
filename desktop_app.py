@@ -930,7 +930,7 @@ class SpeechRulesDialog(ctk.CTkToplevel):
                 else:
                     pct = int((speed - 1.0) * 100)
                     rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
-                    res = loop.run_until_complete(synthesize_text(transformed, voice=voice_key, rate=rate_str))
+                    res = loop.run_until_complete(synthesize_text(transformed, voice=voice_key, rate=rate_str, speed=speed))
                 loop.close()
                 if res and res.get("cache_id"):
                     mp3_p = CACHE_DIR / f"{res['cache_id']}.mp3"
@@ -3277,7 +3277,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
                             else:
                                 pct = int((speed - 1.0) * 100)
                                 rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
-                                res = loop.run_until_complete(synthesize_text(text, voice=self.active_voice_key, rate=rate_str))
+                                res = loop.run_until_complete(synthesize_text(text, voice=self.active_voice_key, rate=rate_str, speed=speed))
                             loop.close()
                             if res:
                                 self.prefetch_cache[cache_key] = res
@@ -3347,7 +3347,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
                             is_male = voice_key.startswith(("am_", "bm_", "em_", "hm_", "im_", "jm_", "pm_", "zm_"))
                             fallback_voice = "en-US-GuyNeural" if is_male else "en-US-JennyNeural"
                             tts_data = loop.run_until_complete(
-                                synthesize_text(text, voice=fallback_voice, rate=rate_str)
+                                synthesize_text(text, voice=fallback_voice, rate=rate_str, speed=speed)
                             )
                     elif engine == "piper":
                         try:
@@ -3361,14 +3361,14 @@ class SpeakaloudDesktopApp(ctk.CTk):
                             is_male = any(m in voice_key.lower() for m in ["ryan", "alan", "danny"])
                             fallback_voice = "en-US-GuyNeural" if is_male else "en-US-JennyNeural"
                             tts_data = loop.run_until_complete(
-                                synthesize_text(text, voice=fallback_voice, rate=rate_str)
+                                synthesize_text(text, voice=fallback_voice, rate=rate_str, speed=speed)
                             )
                     else:
                         pct = int((speed - 1.0) * 100)
                         rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
                         try:
                             tts_data = loop.run_until_complete(
-                                synthesize_text(text, voice=voice_key, rate=rate_str)
+                                synthesize_text(text, voice=voice_key, rate=rate_str, speed=speed)
                             )
                         except Exception as edge_err:
                             print(f"[EdgeTTS] Connection error ({edge_err}), falling back to offline Kokoro")
