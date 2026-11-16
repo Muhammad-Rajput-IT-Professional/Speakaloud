@@ -1644,6 +1644,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
         """Switches between PDF Reader mode and Notepad mode."""
         self._stop_audio()
         if "Notepad" in mode:
+            if self.app_mode == "pdf":
+                self.saved_pdf_sentence_idx = self.current_sentence_idx
             self.app_mode = "notepad"
             # Switch header controls
             self.pdf_header_frame.pack_forget()
@@ -1679,11 +1681,14 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self._set_status(f"Notepad ready ({len(self.sentences)} sentences). Click ▶ Play or double-click to read.")
         else:
             self.sentences = self.pdf_sentences
-            self.current_sentence_idx = 0
+            if hasattr(self, "saved_pdf_sentence_idx") and 0 <= self.saved_pdf_sentence_idx < len(self.sentences):
+                self.current_sentence_idx = self.saved_pdf_sentence_idx
+            elif not (0 <= self.current_sentence_idx < len(self.sentences)):
+                self.current_sentence_idx = 0
             self.current_word_idx = 0
             max_s = max(1, len(self.sentences) - 1)
             self.scrubber_slider.configure(from_=0, to=max_s, number_of_steps=max_s)
-            self.scrubber_slider.set(0)
+            self.scrubber_slider.set(self.current_sentence_idx)
             self._set_status(f"Page {self.current_page_idx + 1} ({len(self.sentences)} sentences). Click any word to read.")
 
     def _toggle_bold(self):
@@ -2279,7 +2284,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self._refresh_toc()
         self._refresh_library_list()
 
-    def _open_pdf_path(self, file_path: str, start_page: int = 0):
+    def _open_pdf_path(self, file_path: str, start_page: Optional[int] = None, start_sentence: int = 0):
         try:
             self._stop_audio()
             p = Path(file_path)
@@ -2292,13 +2297,31 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 self.mode_selector.set("📖 PDF Reader")
                 self._on_mode_change("📖 PDF Reader")
 
+            if self.doc and self.current_doc_id == p.stem:
+                # Same document already open in memory - preserve position seamlessly
+                if start_page is not None:
+                    self.current_page_idx = min(max(0, start_page), self.total_pages - 1)
+                if start_sentence != 0:
+                    self.current_sentence_idx = start_sentence
+                if self.view_mode == "continuous":
+                    self._scroll_to_page(self.current_page_idx)
+                else:
+                    self._render_single_page_view()
+                return
+
             if self.doc:
                 try: self.doc.close()
                 except Exception: pass
 
             self.doc = pymupdf.open(str(p))
             self.total_pages = len(self.doc)
-            self.current_page_idx = min(max(0, start_page), self.total_pages - 1)
+
+            doc_info = state_manager.get_document(p.stem)
+            target_page = start_page if start_page is not None else (doc_info.get("current_page", 0) if doc_info else 0)
+            target_sentence = start_sentence if start_sentence != 0 else (doc_info.get("current_sentence", 0) if doc_info else 0)
+
+            self.current_page_idx = min(max(0, target_page), self.total_pages - 1)
+            self.current_sentence_idx = target_sentence
             self.continuous_page_layouts.clear()
             self.page_sentences_cache.clear()
 
@@ -2317,10 +2340,30 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
             self._refresh_toc()
             self._refresh_library_list()
-            self._load_page(self.current_page_idx)
+            self._load_page(self.current_page_idx, initial_sentence_idx=target_sentence)
 
         except Exception as e:
             messagebox.showerror("Error Opening PDF", f"Failed to open PDF:\n{e}")
+
+    def _open_pdf_from_library(self, file_path: str):
+        """Switches to or opens a PDF from the library, strictly preserving latest page and sentence reading position."""
+        p = Path(file_path)
+        doc_id = p.stem
+
+        if self.doc and self.current_doc_id == doc_id:
+            if self.app_mode != "pdf":
+                self.mode_selector.set("📖 PDF Reader")
+                self._on_mode_change("📖 PDF Reader")
+            if self.view_mode == "continuous":
+                self._scroll_to_page(self.current_page_idx)
+            else:
+                self._render_single_page_view()
+            return
+
+        doc_info = state_manager.get_document(doc_id)
+        saved_page = doc_info.get("current_page", 0) if doc_info else 0
+        saved_sentence = doc_info.get("current_sentence", 0) if doc_info else 0
+        self._open_pdf_path(file_path, start_page=saved_page, start_sentence=saved_sentence)
 
     def _refresh_library_list(self):
         for widget in self.library_scroll.winfo_children():
@@ -2356,7 +2399,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
             # Pack action buttons on the right first
             btn_read = ctk.CTkButton(
                 bot_row, text="Read", width=52, height=22, font=("Segoe UI", 11),
-                command=lambda p=doc["file_path"], pg=doc.get("current_page", 0): self._open_pdf_path(p, pg)
+                command=lambda p=doc["file_path"]: self._open_pdf_from_library(p)
             )
             btn_read.pack(side="right", padx=2)
 
@@ -2432,14 +2475,14 @@ class SpeakaloudDesktopApp(ctk.CTk):
             print(f"[PDF] Error extracting sentences for page {page_idx}: {e}")
             return []
 
-    def _load_page(self, page_idx: int):
-        """Loads and parses sentences and words for page_idx."""
+    def _load_page(self, page_idx: int, initial_sentence_idx: int = 0):
+        """Loads and parses sentences and words for page_idx, maintaining sentence reading progress."""
         if not self.doc or page_idx < 0 or page_idx >= self.total_pages:
             return
 
         self._stop_audio()
         self.current_page_idx = page_idx
-        self.current_sentence_idx = 0
+        self.current_sentence_idx = initial_sentence_idx
         self.current_word_idx = 0
         self.current_highlighted_word_idx = None
         self.sentence_word_timings = []
@@ -2450,7 +2493,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.page_entry.insert(0, str(page_idx + 1))
 
         if self.current_doc_id:
-            state_manager.update_progress(self.current_doc_id, page_idx, 0)
+            state_manager.update_progress(self.current_doc_id, page_idx, initial_sentence_idx)
 
         self.pdf_sentences = self._get_page_sentences(page_idx)
 
@@ -2462,7 +2505,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 from_=0, to=max_slider,
                 number_of_steps=max_slider
             )
-            self.scrubber_slider.set(0)
+            self.scrubber_slider.set(self.current_sentence_idx)
             self._set_status(f"Page {page_idx + 1} loaded ({len(self.sentences)} sentences). Click any word to read.")
 
             # Pre-warm Kokoro / Edge voice and prefetch opening sentence in background
@@ -2967,30 +3010,25 @@ class SpeakaloudDesktopApp(ctk.CTk):
             cropped_base = base_img.crop((s_x0, s_y0, s_x1, s_y1))
 
             if self.theme == "dark":
-                c_arr = np.array(cropped_base, dtype=np.float32)
-                lum = np.mean(c_arr, axis=2, keepdims=True)
-                text_factor = np.clip((lum - 32.0) / 180.0, 0.0, 1.0)
+                mask = Image.new("RGB", (cropped_base.width, cropped_base.height), (0, 0, 0))
+                draw = ImageDraw.Draw(mask)
 
-                bg_buf = np.full_like(c_arr, 32.0)
-                # Deep sapphire blue [28, 65, 120] for sentence lines
+                # Sapphire blue screen blend for sentence lines
                 for lx0, ly0, lx1, ly1 in line_boxes:
-                    bx0 = max(0, lx0 - s_x0)
-                    by0 = max(0, ly0 - s_y0)
-                    bx1 = min(c_arr.shape[1], lx1 - s_x0)
-                    by1 = min(c_arr.shape[0], ly1 - s_y0)
-                    bg_buf[by0:by1, bx0:bx1] = [28.0, 65.0, 120.0]
+                    draw.rectangle(
+                        [lx0 - s_x0, ly0 - s_y0, lx1 - s_x0, ly1 - s_y0],
+                        fill=(0, 42, 110)
+                    )
 
-                # Warm amber gold [160, 115, 20] for active word
+                # Vibrant warm amber gold screen blend for active word
                 if word_box:
                     wx0, wy0, wx1, wy1 = word_box
-                    bx0 = max(0, wx0 - s_x0)
-                    by0 = max(0, wy0 - s_y0)
-                    bx1 = min(c_arr.shape[1], wx1 - s_x0)
-                    by1 = min(c_arr.shape[0], wy1 - s_y0)
-                    bg_buf[by0:by1, bx0:bx1] = [160.0, 115.0, 20.0]
+                    draw.rectangle(
+                        [wx0 - s_x0, wy0 - s_y0, wx1 - s_x0, wy1 - s_y0],
+                        fill=(155, 105, 0)
+                    )
 
-                res_arr = bg_buf * (1.0 - text_factor) + c_arr * text_factor
-                highlighted_crop = Image.fromarray(np.clip(res_arr, 0, 255).astype(np.uint8), mode="RGB")
+                highlighted_crop = ImageChops.screen(cropped_base, mask)
             else:
                 mask = Image.new("RGB", (cropped_base.width, cropped_base.height), (255, 255, 255))
                 draw = ImageDraw.Draw(mask)
@@ -3392,6 +3430,9 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.current_word_idx = start_word_idx
         self.is_playing = True
         self.is_synthesizing = True
+
+        if self.app_mode == "pdf" and self.current_doc_id:
+            state_manager.update_progress(self.current_doc_id, self.current_page_idx, sentence_idx)
 
         # Highlight the full sentence immediately on canvas
         self._highlight_sentence(sentence_idx, start_word_idx)
