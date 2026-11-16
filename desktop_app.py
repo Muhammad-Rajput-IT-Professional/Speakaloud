@@ -1135,6 +1135,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.playback_seq: int = 0
         self.prefetch_cache: Dict[str, Any] = {}
         self.is_synthesizing: bool = False
+        self._is_programmatic_scrolling: bool = False
         self._speed_timer = None
         self._is_closing = False
         self.voice_dialog = None
@@ -1680,6 +1681,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.scrubber_slider.set(0)
             self._set_status(f"Notepad ready ({len(self.sentences)} sentences). Click ▶ Play or double-click to read.")
         else:
+            self.pdf_sentences = self._get_page_sentences(self.current_page_idx)
             self.sentences = self.pdf_sentences
             if hasattr(self, "saved_pdf_sentence_idx") and 0 <= self.saved_pdf_sentence_idx < len(self.sentences):
                 self.current_sentence_idx = self.saved_pdf_sentence_idx
@@ -2299,14 +2301,9 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
             if self.doc and self.current_doc_id == p.stem:
                 # Same document already open in memory - preserve position seamlessly
-                if start_page is not None:
-                    self.current_page_idx = min(max(0, start_page), self.total_pages - 1)
-                if start_sentence != 0:
-                    self.current_sentence_idx = start_sentence
-                if self.view_mode == "continuous":
-                    self._scroll_to_page(self.current_page_idx)
-                else:
-                    self._render_single_page_view()
+                target_page = start_page if start_page is not None else self.current_page_idx
+                target_sentence = start_sentence if start_sentence != 0 else self.current_sentence_idx
+                self._load_page(target_page, initial_sentence_idx=target_sentence)
                 return
 
             if self.doc:
@@ -2350,19 +2347,18 @@ class SpeakaloudDesktopApp(ctk.CTk):
         p = Path(file_path)
         doc_id = p.stem
 
-        if self.doc and self.current_doc_id == doc_id:
-            if self.app_mode != "pdf":
-                self.mode_selector.set("📖 PDF Reader")
-                self._on_mode_change("📖 PDF Reader")
-            if self.view_mode == "continuous":
-                self._scroll_to_page(self.current_page_idx)
-            else:
-                self._render_single_page_view()
-            return
+        if self.app_mode != "pdf":
+            self.mode_selector.set("📖 PDF Reader")
+            self._on_mode_change("📖 PDF Reader")
 
         doc_info = state_manager.get_document(doc_id)
         saved_page = doc_info.get("current_page", 0) if doc_info else 0
         saved_sentence = doc_info.get("current_sentence", 0) if doc_info else 0
+
+        if self.doc and self.current_doc_id == doc_id:
+            self._load_page(saved_page, initial_sentence_idx=saved_sentence)
+            return
+
         self._open_pdf_path(file_path, start_page=saved_page, start_sentence=saved_sentence)
 
     def _refresh_library_list(self):
@@ -2450,14 +2446,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
             btn.pack(fill="x", pady=1)
 
     def _jump_to_toc_page(self, page_idx: int):
-        if self.view_mode == "continuous":
-            self.current_page_idx = page_idx
-            self.sentences = self._get_page_sentences(page_idx)
-            self.page_entry.delete(0, "end")
-            self.page_entry.insert(0, str(page_idx + 1))
-            self._scroll_to_page(page_idx)
-        else:
-            self._load_page(page_idx)
+        self._load_page(page_idx)
 
     def _get_page_sentences(self, page_idx: int) -> List[Dict[str, Any]]:
         """Returns parsed sentences for page_idx, caching results for instant navigation."""
@@ -2468,7 +2457,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         try:
             page = self.doc[page_idx]
             raw_words = page.get_text("words")
-            sentences = self._group_words_into_sentences(raw_words)
+            sentences = self._group_words_into_sentences(raw_words, page_idx=page_idx)
             self.page_sentences_cache[page_idx] = sentences
             return sentences
         except Exception as e:
@@ -2524,6 +2513,9 @@ class SpeakaloudDesktopApp(ctk.CTk):
         else:
             self._render_single_page_view()
 
+        if self.app_mode == "pdf" and initial_sentence_idx > 0 and 0 <= initial_sentence_idx < len(self.sentences):
+            self.after(60, lambda: self._highlight_sentence(initial_sentence_idx, None))
+
     def _auto_prune_audio_cache(self):
         """Automatically prunes stale audio cache files in background every 3 pages."""
         def _worker():
@@ -2551,7 +2543,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _group_words_into_sentences(self, raw_words: List[Any]) -> List[Dict[str, Any]]:
+    def _group_words_into_sentences(self, raw_words: List[Any], page_idx: int = 0) -> List[Dict[str, Any]]:
         """Groups raw word tuples into sentences with exact pixel bounding boxes."""
         if not raw_words:
             return []
@@ -2579,7 +2571,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 "b_no": b_no,
                 "l_no": l_no,
                 "s_idx": s_idx,
-                "w_idx": len(cur_words)
+                "w_idx": len(cur_words),
+                "page_idx": page_idx
             })
 
             is_break = False
@@ -2614,6 +2607,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
             if is_break and len(cur_words) >= 1:
                 sentences.append({
                     "s_idx": s_idx,
+                    "page_idx": page_idx,
                     "text": " ".join(cur_tokens),
                     "words": cur_words
                 })
@@ -2624,6 +2618,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         if cur_words:
             sentences.append({
                 "s_idx": s_idx,
+                "page_idx": page_idx,
                 "text": " ".join(cur_tokens),
                 "words": cur_words
             })
@@ -2812,11 +2807,24 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 if layout["is_rendered"]:
                     self._unload_continuous_page(layout)
 
-        if centered_page_idx is not None and centered_page_idx != self.current_page_idx and not self.is_playing:
+        if (centered_page_idx is not None 
+            and centered_page_idx != self.current_page_idx 
+            and not self.is_playing 
+            and not self.is_synthesizing 
+            and not getattr(self, "_is_programmatic_scrolling", False)):
             self.current_page_idx = centered_page_idx
-            self.sentences = self._get_page_sentences(centered_page_idx)
+            self.pdf_sentences = self._get_page_sentences(centered_page_idx)
+            self.sentences = self.pdf_sentences
             self.page_entry.delete(0, "end")
             self.page_entry.insert(0, str(centered_page_idx + 1))
+            num_sentences = len(self.sentences)
+            max_slider = max(1, num_sentences - 1)
+            self.scrubber_slider.configure(
+                from_=0, to=max_slider,
+                number_of_steps=max_slider
+            )
+            self.scrubber_slider.set(0)
+            self._set_status(f"Page {centered_page_idx + 1} ({len(self.sentences)} sentences). Click any word to read.")
             if self.current_doc_id:
                 state_manager.update_progress(self.current_doc_id, centered_page_idx, 0)
 
@@ -2852,9 +2860,11 @@ class SpeakaloudDesktopApp(ctk.CTk):
         layout["is_rendered"] = True
 
         # If active sentence is on this page and playing, re-apply highlight
-        if self.is_playing and self.current_page_idx == p_idx and 0 <= self.current_sentence_idx < len(self.sentences):
-            self.current_highlighted_word_idx = None
-            self._highlight_sentence(self.current_sentence_idx, self.current_word_idx)
+        if (self.is_playing or self.is_synthesizing) and 0 <= self.current_sentence_idx < len(self.sentences):
+            cur_s = self.sentences[self.current_sentence_idx]
+            if cur_s.get("page_idx", self.current_page_idx) == p_idx:
+                self.current_highlighted_word_idx = None
+                self._highlight_sentence(self.current_sentence_idx, self.current_word_idx)
 
     def _unload_continuous_page(self, layout: Dict[str, Any]):
         """Unloads an off-screen page image to prevent RAM ballooning on large PDFs."""
@@ -2884,11 +2894,18 @@ class SpeakaloudDesktopApp(ctk.CTk):
         sr = [float(x) for x in scroll_region.split()]
         total_h = max(1.0, sr[3])
         target_y = max(0.0, (layout["y"] - 16.0) / total_h)
-        self.pdf_canvas.yview_moveto(min(1.0, target_y))
-        self._update_continuous_viewport()
-        self.current_page_idx = page_idx
-        self.page_entry.delete(0, "end")
-        self.page_entry.insert(0, str(page_idx + 1))
+        self._is_programmatic_scrolling = True
+        try:
+            self.pdf_canvas.yview_moveto(min(1.0, target_y))
+            self.pdf_canvas.update_idletasks()
+            self.current_page_idx = page_idx
+            self.pdf_sentences = self._get_page_sentences(page_idx)
+            self.sentences = self.pdf_sentences
+            self.page_entry.delete(0, "end")
+            self.page_entry.insert(0, str(page_idx + 1))
+            self._update_continuous_viewport()
+        finally:
+            self._is_programmatic_scrolling = False
 
     def _clear_sentence_highlight(self):
         """Clears all sentence and word highlight indicators from canvas or notepad, restoring the clean page."""
@@ -2901,8 +2918,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
             pass
 
         if self.view_mode == "continuous" and self.continuous_page_layouts:
-            if 0 <= self.current_page_idx < len(self.continuous_page_layouts):
-                layout = self.continuous_page_layouts[self.current_page_idx]
+            for layout in self.continuous_page_layouts:
                 if layout.get("base_img") is not None and layout.get("canvas_img_id") is not None:
                     try:
                         layout["photo"] = ImageTk.PhotoImage(layout["base_img"])
@@ -2929,11 +2945,18 @@ class SpeakaloudDesktopApp(ctk.CTk):
         if not self.sentences or sentence_idx < 0 or sentence_idx >= len(self.sentences):
             return
 
+        sentence = self.sentences[sentence_idx]
+        words = sentence.get("words", [])
+        if not words:
+            return
+
+        target_page_idx = sentence.get("page_idx", self.current_page_idx)
+
         layout = None
         if self.view_mode == "continuous":
-            if not self.continuous_page_layouts or self.current_page_idx >= len(self.continuous_page_layouts):
+            if not self.continuous_page_layouts or target_page_idx >= len(self.continuous_page_layouts):
                 return
-            layout = self.continuous_page_layouts[self.current_page_idx]
+            layout = self.continuous_page_layouts[target_page_idx]
             if not layout.get("is_rendered") or layout.get("base_img") is None or layout.get("canvas_img_id") is None:
                 self._render_continuous_page(layout)
             base_img = layout.get("base_img")
@@ -3081,9 +3104,14 @@ class SpeakaloudDesktopApp(ctk.CTk):
                             sr = [float(x) for x in scroll_region.split()]
                             total_h = max(1.0, sr[3])
                             target_y = max(0.0, (min_cy0 - 50) / total_h)
-                            self.pdf_canvas.yview_moveto(min(1.0, target_y))
-                            if self.view_mode == "continuous":
-                                self._update_continuous_viewport()
+                            self._is_programmatic_scrolling = True
+                            try:
+                                self.pdf_canvas.yview_moveto(min(1.0, target_y))
+                                self.pdf_canvas.update_idletasks()
+                                if self.view_mode == "continuous":
+                                    self._update_continuous_viewport()
+                            finally:
+                                self._is_programmatic_scrolling = False
             except Exception:
                 pass
 
@@ -3184,26 +3212,17 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
     def _prev_page(self):
         if self.current_page_idx > 0:
-            if self.view_mode == "continuous":
-                self._scroll_to_page(self.current_page_idx - 1)
-            else:
-                self._load_page(self.current_page_idx - 1)
+            self._load_page(self.current_page_idx - 1)
 
     def _next_page(self):
         if self.current_page_idx < self.total_pages - 1:
-            if self.view_mode == "continuous":
-                self._scroll_to_page(self.current_page_idx + 1)
-            else:
-                self._load_page(self.current_page_idx + 1)
+            self._load_page(self.current_page_idx + 1)
 
     def _jump_page_event(self, event):
         try:
             target = int(self.page_entry.get().strip()) - 1
             if 0 <= target < self.total_pages:
-                if self.view_mode == "continuous":
-                    self._scroll_to_page(target)
-                else:
-                    self._load_page(target)
+                self._load_page(target)
             else:
                 self.page_entry.delete(0, "end")
                 self.page_entry.insert(0, str(self.current_page_idx + 1))
@@ -3307,13 +3326,17 @@ class SpeakaloudDesktopApp(ctk.CTk):
         match = self._find_word_at_coords(page_idx, px, py)
         if match:
             s_idx, w_idx, word = match
-            if page_idx != self.current_page_idx:
-                self.current_page_idx = page_idx
-                self.sentences = self._get_page_sentences(page_idx)
-                self.page_entry.delete(0, "end")
-                self.page_entry.insert(0, str(page_idx + 1))
-                if self.current_doc_id:
-                    state_manager.update_progress(self.current_doc_id, page_idx, 0)
+            self.current_page_idx = page_idx
+            self.pdf_sentences = self._get_page_sentences(page_idx)
+            self.sentences = self.pdf_sentences
+            self.page_entry.delete(0, "end")
+            self.page_entry.insert(0, str(page_idx + 1))
+            num_sentences = len(self.sentences)
+            max_slider = max(1, num_sentences - 1)
+            self.scrubber_slider.configure(from_=0, to=max_slider, number_of_steps=max_slider)
+            self.scrubber_slider.set(s_idx)
+            if self.current_doc_id:
+                state_manager.update_progress(self.current_doc_id, page_idx, s_idx)
             self.play_sentence(s_idx, w_idx)
 
     def _toggle_playback(self):
@@ -3332,7 +3355,13 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 else:
                     self.play_sentence(self.current_sentence_idx, self.current_word_idx)
             else:
-                self.play_sentence(self.current_sentence_idx, self.current_word_idx)
+                if not self.sentences or (self.sentences and self.sentences[0].get("page_idx") != self.current_page_idx):
+                    self.pdf_sentences = self._get_page_sentences(self.current_page_idx)
+                    self.sentences = self.pdf_sentences
+                if 0 <= self.current_sentence_idx < len(self.sentences):
+                    self.play_sentence(self.current_sentence_idx, self.current_word_idx)
+                elif self.sentences:
+                    self.play_sentence(0, 0)
 
     def _prev_sentence(self):
         self._stop_audio()
@@ -3340,21 +3369,9 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.play_sentence(self.current_sentence_idx - 1, 0)
         elif self.app_mode == "pdf" and self.current_page_idx > 0:
             prev_page = self.current_page_idx - 1
-            if self.view_mode == "continuous":
-                self.current_page_idx = prev_page
-                self.sentences = self._get_page_sentences(prev_page)
-                self.page_entry.delete(0, "end")
-                self.page_entry.insert(0, str(prev_page + 1))
-                if self.current_doc_id:
-                    state_manager.update_progress(self.current_doc_id, prev_page, 0)
-                self._update_continuous_viewport()
-                self._scroll_to_page(prev_page)
-                last_idx = max(0, len(self.sentences) - 1)
-                self.after(150, lambda: self.play_sentence(last_idx, 0))
-            else:
-                self._load_page(prev_page)
-                last_idx = max(0, len(self.sentences) - 1)
-                self.after(150, lambda: self.play_sentence(last_idx, 0))
+            self._load_page(prev_page)
+            last_idx = max(0, len(self.sentences) - 1)
+            self.after(150, lambda: self.play_sentence(last_idx, 0))
 
     def _next_sentence(self):
         self._stop_audio()
@@ -3362,19 +3379,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.play_sentence(self.current_sentence_idx + 1, 0)
         elif self.app_mode == "pdf" and self.current_page_idx < self.total_pages - 1:
             next_page = self.current_page_idx + 1
-            if self.view_mode == "continuous":
-                self.current_page_idx = next_page
-                self.sentences = self._get_page_sentences(next_page)
-                self.page_entry.delete(0, "end")
-                self.page_entry.insert(0, str(next_page + 1))
-                if self.current_doc_id:
-                    state_manager.update_progress(self.current_doc_id, next_page, 0)
-                self._update_continuous_viewport()
-                self._scroll_to_page(next_page)
-                self.after(150, lambda: self.play_sentence(0, 0))
-            else:
-                self._load_page(next_page)
-                self.after(150, lambda: self.play_sentence(0, 0))
+            self._load_page(next_page)
+            self.after(150, lambda: self.play_sentence(0, 0))
         else:
             self.btn_play_pause.configure(text="▶ Play", fg_color="#2563eb")
             self._set_status("End of text reached.")
@@ -3421,6 +3427,14 @@ class SpeakaloudDesktopApp(ctk.CTk):
         """Synthesizes and plays sentence audio starting directly at the clicked word."""
         if not self.sentences or sentence_idx < 0 or sentence_idx >= len(self.sentences):
             return
+
+        sentence = self.sentences[sentence_idx]
+        if self.app_mode == "pdf":
+            s_page = sentence.get("page_idx", self.current_page_idx)
+            if s_page != self.current_page_idx:
+                self.current_page_idx = s_page
+                self.page_entry.delete(0, "end")
+                self.page_entry.insert(0, str(s_page + 1))
 
         self._stop_audio()
         self.playback_seq += 1
@@ -3660,19 +3674,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.play_sentence(self.current_sentence_idx + 1, 0)
         elif self.app_mode == "pdf" and self.current_page_idx < self.total_pages - 1:
             next_page = self.current_page_idx + 1
-            if self.view_mode == "continuous":
-                self.current_page_idx = next_page
-                self.sentences = self._get_page_sentences(next_page)
-                self.page_entry.delete(0, "end")
-                self.page_entry.insert(0, str(next_page + 1))
-                if self.current_doc_id:
-                    state_manager.update_progress(self.current_doc_id, next_page, 0)
-                self._update_continuous_viewport()
-                self._scroll_to_page(next_page)
-                self.after(100, lambda: self.play_sentence(0, 0))
-            else:
-                self._load_page(next_page)
-                self.after(100, lambda: self.play_sentence(0, 0))
+            self._load_page(next_page, initial_sentence_idx=0)
+            self.after(100, lambda: self.play_sentence(0, 0))
         else:
             self.btn_play_pause.configure(text="▶ Play", fg_color="#2563eb")
             self._set_status("Finished reading.")
