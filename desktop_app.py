@@ -1150,6 +1150,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
         # Notepad / App Mode
         self.app_mode: str = "pdf"
+        self.notepad_font_size: int = 13
         self.notepad_sentences: List[Dict[str, Any]] = []
         self.pdf_sentences: List[Dict[str, Any]] = []
         self._notepad_save_timer = None
@@ -1386,7 +1387,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.canvas_scroll_x.pack(side="bottom", fill="x")
 
         self.pdf_canvas = tk.Canvas(
-            self.pdf_center_frame, bg="#2b2e38" if self.theme == "dark" else "#e2e8f0",
+            self.pdf_center_frame, bg="#1e1e24" if self.theme == "dark" else "#e2e8f0",
             highlightthickness=0,
             xscrollcommand=self.canvas_scroll_x.set,
             yscrollcommand=self.canvas_scroll_y.set
@@ -1602,8 +1603,12 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.notepad_text.tag_configure("h1", font=("Segoe UI", 18, "bold"), spacing3=10)
         self.notepad_text.tag_configure("h2", font=("Segoe UI", 15, "bold"), spacing3=8)
         self.notepad_text.tag_configure("bullet", lmargin1=16, lmargin2=36)
-        self.notepad_text.tag_configure("sentence_hl", background="#b2d6f3", foreground="#000000")
-        self.notepad_text.tag_configure("word_hl", background="#ffff00", foreground="#000000")
+        if self.theme == "dark":
+            self.notepad_text.tag_configure("sentence_hl", background="#1e3a8a", foreground="#ffffff")
+            self.notepad_text.tag_configure("word_hl", background="#d97706", foreground="#ffffff")
+        else:
+            self.notepad_text.tag_configure("sentence_hl", background="#b2d6f3", foreground="#000000")
+            self.notepad_text.tag_configure("word_hl", background="#ffff00", foreground="#000000")
         self.notepad_text.tag_raise("sentence_hl")
         self.notepad_text.tag_raise("word_hl")
 
@@ -1613,6 +1618,10 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.notepad_text.bind("<Return>", self._on_notepad_return)
         self.notepad_text.bind("<Double-Button-1>", self._on_notepad_double_click)
         self.notepad_text.bind("<Button-3>", self._show_notepad_context_menu)
+        self.notepad_text.bind("<Control-MouseWheel>", self._on_notepad_ctrl_mousewheel)
+        self.notepad_text.bind("<Control-plus>", lambda e: (self._zoom_notepad_font(+1), "break")[1])
+        self.notepad_text.bind("<Control-equal>", lambda e: (self._zoom_notepad_font(+1), "break")[1])
+        self.notepad_text.bind("<Control-minus>", lambda e: (self._zoom_notepad_font(-1), "break")[1])
         self.notepad_text.bind("<Control-b>", lambda e: (self._toggle_bold(), "break")[1])
         self.notepad_text.bind("<Control-B>", lambda e: (self._toggle_bold(), "break")[1])
         self.notepad_text.bind("<Control-i>", lambda e: (self._toggle_italic(), "break")[1])
@@ -1819,6 +1828,25 @@ class SpeakaloudDesktopApp(ctk.CTk):
             self.notepad_context_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.notepad_context_menu.grab_release()
+
+    def _zoom_notepad_font(self, delta: int):
+        """Scales notepad font size dynamically (Ctrl + MouseWheel / Ctrl + +/-)."""
+        new_size = max(9, min(42, self.notepad_font_size + delta))
+        if new_size != self.notepad_font_size:
+            self.notepad_font_size = new_size
+            self.notepad_text.configure(font=("Segoe UI", new_size))
+            self.notepad_text.tag_configure("bold", font=("Segoe UI", new_size, "bold"))
+            self.notepad_text.tag_configure("italic", font=("Segoe UI", new_size, "italic"))
+            self.notepad_text.tag_configure("h1", font=("Segoe UI", int(round(new_size * 1.4)), "bold"))
+            self.notepad_text.tag_configure("h2", font=("Segoe UI", int(round(new_size * 1.15)), "bold"))
+        return "break"
+
+    def _on_notepad_ctrl_mousewheel(self, event):
+        if event.delta > 0:
+            self._zoom_notepad_font(+1)
+        elif event.delta < 0:
+            self._zoom_notepad_font(-1)
+        return "break"
 
     def _on_notepad_key_press(self, event):
         if self.is_playing:
@@ -2119,7 +2147,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.theme = "light" if self.theme == "dark" else "dark"
         ctk.set_appearance_mode("Light" if self.theme == "light" else "Dark")
         self.btn_theme.configure(text="☀️" if self.theme == "dark" else "🌙")
-        self.pdf_canvas.configure(bg="#2b2e38" if self.theme == "dark" else "#e2e8f0")
+        self.pdf_canvas.configure(bg="#1e1e24" if self.theme == "dark" else "#e2e8f0")
         if hasattr(self, "notepad_text"):
             self.notepad_text.configure(
                 bg="#24242d" if self.theme == "dark" else "#ffffff",
@@ -2128,6 +2156,12 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 selectbackground="#3b82f6" if self.theme == "dark" else "#bfdbfe",
                 selectforeground="#ffffff" if self.theme == "dark" else "#0f172a"
             )
+            if self.theme == "dark":
+                self.notepad_text.tag_configure("sentence_hl", background="#1e3a8a", foreground="#ffffff")
+                self.notepad_text.tag_configure("word_hl", background="#d97706", foreground="#ffffff")
+            else:
+                self.notepad_text.tag_configure("sentence_hl", background="#b2d6f3", foreground="#000000")
+                self.notepad_text.tag_configure("word_hl", background="#ffff00", foreground="#000000")
             self.notepad_card.configure(fg_color=("#ffffff", "#24242d"))
         state_manager.update_settings({"theme": self.theme})
         self._render_current_page()
@@ -2563,6 +2597,18 @@ class SpeakaloudDesktopApp(ctk.CTk):
         """Renders the PDF view (Single Page or Continuous scroll)."""
         self._render_pdf_view()
 
+    def _apply_dark_mode_to_page_image(self, img: Image.Image) -> Image.Image:
+        """Applies high-contrast, modern dark mode to rendered PDF page.
+        Maps white background (255) to dark slate (32 / #202020) and black text (0)
+        to soft crisp white (233 / #e9e9e9), preserving anti-aliasing and image gradients."""
+        try:
+            arr = np.array(img.convert("RGB"), dtype=np.float32)
+            dark_arr = 233.0 - (arr * (201.0 / 255.0))
+            return Image.fromarray(np.clip(dark_arr, 32, 233).astype(np.uint8), mode="RGB")
+        except Exception as e:
+            print(f"[PDF] Dark mode rendering fallback: {e}")
+            return img
+
     def _render_pdf_view(self):
         """Unified entry point for PDF rendering."""
         if not self.doc:
@@ -2613,6 +2659,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
         mat = pymupdf.Matrix(self.zoom_scale, self.zoom_scale)
         pix = page.get_pixmap(matrix=mat)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        if self.theme == "dark":
+            img = self._apply_dark_mode_to_page_image(img)
         self.base_page_img = img
         self.current_photo = ImageTk.PhotoImage(img)
 
@@ -2732,6 +2780,8 @@ class SpeakaloudDesktopApp(ctk.CTk):
         mat = pymupdf.Matrix(self.zoom_scale, self.zoom_scale)
         pix = page.get_pixmap(matrix=mat)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        if self.theme == "dark":
+            img = self._apply_dark_mode_to_page_image(img)
         layout["base_img"] = img
         photo = ImageTk.PhotoImage(img)
         layout["photo"] = photo
@@ -2741,7 +2791,7 @@ class SpeakaloudDesktopApp(ctk.CTk):
         rect_id = self.pdf_canvas.create_rectangle(
             layout["x"] - 1, layout["y"] - 1,
             layout["x"] + pix.width + 1, layout["y"] + pix.height + 1,
-            fill="#ffffff" if self.theme == "light" else "#1e1e24",
+            fill="#ffffff" if self.theme == "light" else "#202020",
             outline=border_color, width=1
         )
         layout["canvas_rect_id"] = rect_id
@@ -2909,25 +2959,53 @@ class SpeakaloudDesktopApp(ctk.CTk):
 
         try:
             cropped_base = base_img.crop((s_x0, s_y0, s_x1, s_y1))
-            mask = Image.new("RGB", (cropped_base.width, cropped_base.height), (255, 255, 255))
-            draw = ImageDraw.Draw(mask)
 
-            # Draw pastel soft blue tint (RGB 178, 214, 243 / #b2d6f3) for sentence lines
-            for lx0, ly0, lx1, ly1 in line_boxes:
-                draw.rectangle(
-                    [lx0 - s_x0, ly0 - s_y0, lx1 - s_x0, ly1 - s_y0],
-                    fill=(178, 214, 243)
-                )
+            if self.theme == "dark":
+                c_arr = np.array(cropped_base, dtype=np.float32)
+                lum = np.mean(c_arr, axis=2, keepdims=True)
+                text_factor = np.clip((lum - 32.0) / 180.0, 0.0, 1.0)
 
-            # Draw bright highlighter yellow (RGB 255, 255, 0 / #ffff00) for active word
-            if word_box:
-                wx0, wy0, wx1, wy1 = word_box
-                draw.rectangle(
-                    [wx0 - s_x0, wy0 - s_y0, wx1 - s_x0, wy1 - s_y0],
-                    fill=(255, 255, 0)
-                )
+                bg_buf = np.full_like(c_arr, 32.0)
+                # Deep sapphire blue [28, 65, 120] for sentence lines
+                for lx0, ly0, lx1, ly1 in line_boxes:
+                    bx0 = max(0, lx0 - s_x0)
+                    by0 = max(0, ly0 - s_y0)
+                    bx1 = min(c_arr.shape[1], lx1 - s_x0)
+                    by1 = min(c_arr.shape[0], ly1 - s_y0)
+                    bg_buf[by0:by1, bx0:bx1] = [28.0, 65.0, 120.0]
 
-            highlighted_crop = ImageChops.multiply(cropped_base, mask)
+                # Warm amber gold [160, 115, 20] for active word
+                if word_box:
+                    wx0, wy0, wx1, wy1 = word_box
+                    bx0 = max(0, wx0 - s_x0)
+                    by0 = max(0, wy0 - s_y0)
+                    bx1 = min(c_arr.shape[1], wx1 - s_x0)
+                    by1 = min(c_arr.shape[0], wy1 - s_y0)
+                    bg_buf[by0:by1, bx0:bx1] = [160.0, 115.0, 20.0]
+
+                res_arr = bg_buf * (1.0 - text_factor) + c_arr * text_factor
+                highlighted_crop = Image.fromarray(np.clip(res_arr, 0, 255).astype(np.uint8), mode="RGB")
+            else:
+                mask = Image.new("RGB", (cropped_base.width, cropped_base.height), (255, 255, 255))
+                draw = ImageDraw.Draw(mask)
+
+                # Draw pastel soft blue tint (RGB 178, 214, 243 / #b2d6f3) for sentence lines
+                for lx0, ly0, lx1, ly1 in line_boxes:
+                    draw.rectangle(
+                        [lx0 - s_x0, ly0 - s_y0, lx1 - s_x0, ly1 - s_y0],
+                        fill=(178, 214, 243)
+                    )
+
+                # Draw bright highlighter yellow (RGB 255, 255, 0 / #ffff00) for active word
+                if word_box:
+                    wx0, wy0, wx1, wy1 = word_box
+                    draw.rectangle(
+                        [wx0 - s_x0, wy0 - s_y0, wx1 - s_x0, wy1 - s_y0],
+                        fill=(255, 255, 0)
+                    )
+
+                highlighted_crop = ImageChops.multiply(cropped_base, mask)
+
             full_img = base_img.copy()
             full_img.paste(highlighted_crop, (s_x0, s_y0))
 

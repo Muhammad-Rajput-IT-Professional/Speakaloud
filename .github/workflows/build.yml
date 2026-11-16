@@ -48,6 +48,8 @@ jobs:
       - name: Build standalone executable with PyInstaller
         run: |
           pyinstaller --noconfirm Speakaloud.spec
+          pyinstaller --noconfirm Speakaloud-OneFile.spec
+          Move-Item -Force "dist\Speakaloud-Portable.exe" "dist\Speakaloud-Portable-${{ matrix.target.name }}.exe"
 
       - name: Compress portable archive
         run: |
@@ -88,8 +90,14 @@ jobs:
       - name: Upload portable ZIP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Speakaloud-Portable-${{ matrix.target.name }}
+          name: Speakaloud-Portable-ZIP-${{ matrix.target.name }}
           path: dist/Speakaloud-Portable-${{ matrix.target.name }}.zip
+
+      - name: Upload portable EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Speakaloud-Portable-EXE-${{ matrix.target.name }}
+          path: dist/Speakaloud-Portable-${{ matrix.target.name }}.exe
 
       - name: Upload installer artifact if generated
         uses: actions/upload-artifact@v4
