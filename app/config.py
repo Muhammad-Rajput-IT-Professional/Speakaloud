@@ -1,9 +1,13 @@
 import os
+import sys
 import shutil
 from pathlib import Path
 
 # Base Paths
-BASE_DIR = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent
 
 def get_app_data_root() -> Path:
     """

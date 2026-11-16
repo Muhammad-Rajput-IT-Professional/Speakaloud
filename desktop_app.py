@@ -35,7 +35,10 @@ except Exception:
     pass
 
 # Project roots and directories
-ROOT_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    ROOT_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+else:
+    ROOT_DIR = Path(__file__).resolve().parent
 
 # Import centralized per-machine paths & core modules
 from app.config import (
@@ -1081,6 +1084,12 @@ class SpeakaloudDesktopApp(ctk.CTk):
         self.title("Speakaloud - Desktop PDF Reader")
         self.geometry("1300x860")
         self.minsize(960, 640)
+        icon_path = ROOT_DIR / "assets" / "icon.ico"
+        if icon_path.exists():
+            try:
+                self.iconbitmap(str(icon_path))
+            except Exception:
+                pass
 
         # Theme
         self.settings = state_manager.get_settings()

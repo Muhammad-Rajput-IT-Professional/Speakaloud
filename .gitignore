@@ -2,7 +2,10 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.spec
+# Build outputs & installers
+dist/
+dist-installer/
+build/
 
 # User Data & Storage (Stored per-machine in %LOCALAPPDATA%\Speakaloud)
 data/

@@ -1,4 +1,4 @@
-name: Build Standalone Windows Executable
+name: Build & Release Standalone Windows Executables
 
 on:
   push:
@@ -10,10 +10,24 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+  build-matrix:
+    name: Build (${{ matrix.target.name }})
+    runs-on: ${{ matrix.target.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: Windows-x64
+            os: windows-latest
+            arch: x64
+            setup_arch: x64
+            py_arch: x64
+          - name: Windows-ARM64
+            os: windows-11-arm
+            arch: arm64
+            setup_arch: arm64
+            py_arch: arm64
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,6 +36,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          architecture: ${{ matrix.target.py_arch }}
           cache: 'pip'
 
       - name: Install dependencies
@@ -32,22 +47,79 @@ jobs:
 
       - name: Build standalone executable with PyInstaller
         run: |
-          pyinstaller --noconfirm --onedir --windowed --name "Speakaloud" --collect-all "customtkinter" --collect-all "pymupdf" desktop_app.py
+          pyinstaller --noconfirm Speakaloud.spec
 
-      - name: Compress portable folder
+      - name: Compress portable archive
         run: |
-          Compress-Archive -Path dist/Speakaloud/* -DestinationPath dist/Speakaloud-Portable-Windows-x64.zip
+          Compress-Archive -Path dist/Speakaloud/* -DestinationPath dist/Speakaloud-Portable-${{ matrix.target.name }}.zip
 
-      - name: Upload Build Artifact
+      - name: Try compile Inno Setup installer
+        id: compile-installer
+        shell: powershell
+        run: |
+          $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue)
+          if (-not $iscc) {
+            Write-Host "Installing Inno Setup..."
+            if (Get-Command choco -ErrorAction SilentlyContinue) {
+              choco install innosetup -y
+            } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+              winget install JRSoftware.InnoSetup -e --silent --accept-source-agreements --accept-package-agreements
+            }
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+            $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue)
+            if (-not $iscc) {
+              if (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
+                $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+              } elseif (Test-Path "C:\Program Files\Inno Setup 6\ISCC.exe") {
+                $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+              }
+            }
+          }
+
+          if ($iscc) {
+            Write-Host "Compiling installer with $iscc..."
+            & $iscc /DAppArch=${{ matrix.target.setup_arch }} installer.iss
+          } else {
+            Write-Host "Inno Setup compiler not found; portable zip will be used."
+          }
+
+      - name: Upload portable ZIP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Speakaloud-Portable-Windows-x64
-          path: dist/Speakaloud-Portable-Windows-x64.zip
+          name: Speakaloud-Portable-${{ matrix.target.name }}
+          path: dist/Speakaloud-Portable-${{ matrix.target.name }}.zip
 
-      - name: Release to GitHub (on tags)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Upload installer artifact if generated
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Speakaloud-Installer-${{ matrix.target.name }}
+          path: dist-installer/*.exe
+          if-no-files-found: ignore
+
+  release:
+    name: Publish GitHub Release
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-dist
+          find release-assets/ -type f \( -name "*.zip" -o -name "*.exe" \) -exec cp {} release-dist/ \;
+          ls -la release-dist/
+
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Speakaloud-Portable-Windows-x64.zip
+          files: release-dist/*
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
