@@ -20,6 +20,7 @@ import pymupdf  # Fast C++ MuPDF engine
 from PIL import Image, ImageTk, ImageChops, ImageDraw
 import sounddevice as sd
 import soundfile as sf
+import numpy as np
 
 # Suppress PyMuPDF C++ warnings/errors to stderr (e.g. Screen annotations)
 try:
