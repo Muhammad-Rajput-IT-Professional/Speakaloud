@@ -2287,6 +2287,11 @@ class SpeakaloudDesktopApp(ctk.CTk):
                 messagebox.showerror("File Not Found", f"Could not find: {file_path}")
                 return
 
+            # Automatically switch to PDF Reader mode if currently in Notepad
+            if self.app_mode != "pdf":
+                self.mode_selector.set("📖 PDF Reader")
+                self._on_mode_change("📖 PDF Reader")
+
             if self.doc:
                 try: self.doc.close()
                 except Exception: pass
